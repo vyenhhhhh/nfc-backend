@@ -212,7 +212,7 @@ class AccountController extends Controller
 
     /**
      * The time ins and time outs one kiosk recorded on a day, newest first:
-     * [{ key, action: CHECK_IN|CHECK_OUT, name, photo, student_id, uid, time, at, offline }]
+     * [{ key, action: TIME_IN|TIME_OUT, name, photo, student_id, uid, time, at, offline }]
      * Taps from before the kiosk was saved on each record: an HTE kiosk shows its own interns', the CCIS kiosk the rest.
      */
     public static function kioskTaps($kiosk, string $date): array
@@ -236,14 +236,14 @@ class AccountController extends Controller
         };
         $out = [];
         foreach ($rows as $r) {
-            foreach ([['CHECK_IN', 'checked_in_at', 'kiosk_in', 'offline_in'], ['CHECK_OUT', 'checked_out_at', 'kiosk_out', 'offline_out']] as [$act, $col, $kcol, $ocol]) {
+            foreach ([['TIME_IN', 'checked_in_at', 'kiosk_in', 'offline_in'], ['TIME_OUT', 'checked_out_at', 'kiosk_out', 'offline_out']] as [$act, $col, $kcol, $ocol]) {
                 if (empty($r->$col)) continue;
                 $here = $hasCol && $r->$kcol !== null ? $r->$kcol === $tag : $guess($r);
                 if (!$here) continue;
                 $at = Carbon::parse($r->$col, 'Asia/Manila');
                 $out[] = [
-                    'key' => "r{$r->id}-" . ($act === 'CHECK_IN' ? 'in' : 'out'),
-                    'token' => "r{$r->id}-" . ($act === 'CHECK_IN' ? 'in' : 'out'),
+                    'key' => "r{$r->id}-" . ($act === 'TIME_IN' ? 'in' : 'out'),
+                    'token' => "r{$r->id}-" . ($act === 'TIME_IN' ? 'in' : 'out'),
                     'action' => $act, 'name' => $r->name, 'photo' => $r->photo, 'student_id' => $r->student_id ?? null,
                     'uid' => $r->uid, 'time' => $at->format('h:i:s A'), 'at' => $at->toIso8601String(),
                     'offline' => !empty($r->$ocol ?? null),
@@ -276,8 +276,8 @@ class AccountController extends Controller
         $taps = self::kioskTaps($kiosk, $date);
         return response()->json([
             'date' => $date, 'taps' => $taps,
-            'ins' => count(array_filter($taps, fn ($t) => $t['action'] === 'CHECK_IN')),
-            'outs' => count(array_filter($taps, fn ($t) => $t['action'] === 'CHECK_OUT')),
+            'ins' => count(array_filter($taps, fn ($t) => $t['action'] === 'TIME_IN')),
+            'outs' => count(array_filter($taps, fn ($t) => $t['action'] === 'TIME_OUT')),
         ]);
     }
 

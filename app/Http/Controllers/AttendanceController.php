@@ -120,13 +120,13 @@ class AttendanceController extends Controller
             ->orderBy('id')
             ->get();
 
-        $openRecord = $todayRows->first(fn ($r) => $r->action === 'CHECK_IN' && !$r->checked_out_at);
+        $openRecord = $todayRows->first(fn ($r) => $r->action === 'TIME_IN' && !$r->checked_out_at);
 
         // ── accidental duplicate: a second tap within 5 minutes is refused with a warning ──
         $cooldown = (int) config('ojt.tap_cooldown_minutes', 5);
         $last = null;   // [timestamp, action] of the latest tap today
         foreach ($todayRows as $r) {
-            foreach ([['CHECK_IN', $r->checked_in_at], ['CHECK_OUT', $r->checked_out_at]] as [$act, $t]) {
+            foreach ([['TIME_IN', $r->checked_in_at], ['TIME_OUT', $r->checked_out_at]] as [$act, $t]) {
                 if (!$t) continue;
                 $ts = Carbon::parse($t, 'Asia/Manila')->getTimestamp();
                 if (!$last || $ts > $last[0]) $last = [$ts, $act];
@@ -134,7 +134,7 @@ class AttendanceController extends Controller
         }
         if ($last && abs($now->getTimestamp() - $last[0]) < $cooldown * 60) {
             $at   = Carbon::createFromTimestamp($last[0], 'Asia/Manila');
-            $what = $last[1] === 'CHECK_IN' ? 'timed in' : 'timed out';
+            $what = $last[1] === 'TIME_IN' ? 'timed in' : 'timed out';
             return response()->json([
                 'code'    => 'DUPLICATE_TAP',
                 'name'    => $intern->name ?? null,
@@ -198,12 +198,12 @@ class AttendanceController extends Controller
             ], 409);
         }
 
-        $action = $openRecord ? 'CHECK_OUT' : 'CHECK_IN';
+        $action = $openRecord ? 'TIME_OUT' : 'TIME_IN';
         $sched  = config('ojt.schedule');
         $at     = fn (float $h) => $now->copy()->startOfDay()->addMinutes((int) round($h * 60));
         $note   = null;
 
-        // UUID v4 bound: token:UID:date:action
+        // UUID v4 bound: token:UID:date:action (action = TIME_IN or TIME_OUT)
         $token = (string) Str::uuid() . ':' . $uid . ':' . $today . ':' . $action;
 
         DB::table('tokens')->insert([
@@ -225,12 +225,12 @@ class AttendanceController extends Controller
             fn () => \App\Services\SchemaCache::has('attendance_records', 'kiosk_in'));
         $kioskTag  = AccountController::kioskTag($kiosk);
 
-        if ($action === 'CHECK_IN') {
+        if ($action === 'TIME_IN') {
             DB::table('attendance_records')->insert(array_merge([
                 'user_id'        => $card->user_id,
                 'uid'            => $uid,
                 'date'           => $today,
-                'action'         => 'CHECK_IN',
+                'action'         => 'TIME_IN',
                 'token'          => $token,
                 'checked_in_at'  => $now,          // the real time is kept (the DTR shows it)
                 'checked_out_at' => null,
@@ -249,7 +249,7 @@ class AttendanceController extends Controller
             }
         } else {
             $update = [
-                'action'         => 'CHECK_OUT',
+                'action'         => 'TIME_OUT',
                 'checked_out_at' => $now,
                 'updated_at'     => $now,
             ];

@@ -286,7 +286,7 @@ class OnlineSubmissionController extends Controller
                 'user_id'        => $submission->user_id,
                 'uid'            => 'ONLINE',
                 'date'           => $day->toDateString(),
-                'action'         => 'CHECK_OUT',
+                'action'         => 'TIME_OUT',
                 'token'          => 'ONLINE-VALIDATED-' . $request->submission_id,
                 'checked_in_at'  => $day->copy()->addHours($s['am_in']),
                 'checked_out_at' => $day->copy()->addHours($s['pm_out']),

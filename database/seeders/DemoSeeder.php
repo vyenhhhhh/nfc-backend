@@ -87,7 +87,7 @@ class DemoSeeder extends Seeder
                 $in  = $day->copy()->setTime(7, 40)->addMinutes(mt_rand(0, 40));
                 $out = $day->copy()->setTime(17, 0)->addMinutes(mt_rand(0, 10));
                 DB::table('attendance_records')->insert([
-                    'user_id' => $id, 'uid' => $uid, 'date' => $day->toDateString(), 'action' => 'CHECK_OUT',
+                    'user_id' => $id, 'uid' => $uid, 'date' => $day->toDateString(), 'action' => 'TIME_OUT',
                     'checked_in_at' => $in, 'checked_out_at' => $out, 'created_at' => $in, 'updated_at' => $out,
                     'ot_minutes' => 0, 'ot_status' => null,
                 ]);

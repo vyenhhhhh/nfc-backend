@@ -166,7 +166,7 @@ class SupervisorController extends Controller
                         'user_id'        => $req->user_id,
                         'uid'            => 'CORRECTION',          // added by an approved time correction (not a card tap)
                         'date'           => $req->date,
-                        'action'         => 'CHECK_OUT',
+                        'action'         => 'TIME_OUT',
                         'token'          => 'correction:' . $req->id,
                         'checked_in_at'  => $req->requested_in,
                         'checked_out_at' => $req->requested_out,
@@ -181,7 +181,7 @@ class SupervisorController extends Controller
                         ->where('id', $req->attendance_id)
                         ->where(fn ($q) => $q->whereNull('checked_out_at')->orWhere('checked_out_at', $req->requested_out))
                         ->update([
-                            'action'         => 'CHECK_OUT',
+                            'action'         => 'TIME_OUT',
                             'checked_in_at'  => $req->requested_in,
                             'checked_out_at' => $req->requested_out,
                             'updated_at'     => $now,
@@ -193,7 +193,7 @@ class SupervisorController extends Controller
                         ->where('id', $req->attendance_id)
                         ->whereNull('checked_out_at')
                         ->update([
-                            'action'         => 'CHECK_OUT',
+                            'action'         => 'TIME_OUT',
                             'checked_out_at' => $req->requested_out,
                             'updated_at'     => $now,
                         ]);
