@@ -32,8 +32,13 @@ class OnlineSubmissionController extends Controller
             'reason'      => ['nullable', 'string', Rule::in(self::OFFSITE_REASONS)],
             'description' => ($cardLost ? 'nullable' : 'required') . '|string|max:500',
             'date'        => 'required|date',
+            // proof of the day (a photo of the work, the supervisor's message, the office notice, ...)
+            'proof'       => 'required|file|mimes:jpg,jpeg,png,pdf|max:5120',
         ], [
             'description.required' => 'Describe the tasks you completed that day.',
+            'proof.required'       => 'Attach a proof for this day (a photo or PDF).',
+            'proof.mimes'          => 'The proof must be a JPG, PNG or PDF file.',
+            'proof.max'            => 'The proof must be 5 MB or smaller.',
             'reason.in'             => 'Choose a reason from the list.',
         ]);
         $tasks = trim((string) $request->input('description', ''));
@@ -98,14 +103,20 @@ class OnlineSubmissionController extends Controller
             ], 409);
         }
 
-        $id = DB::table('online_submissions')->insertGetId([
+        $row = [
             'user_id'     => $request->user_id,
             'date'        => $request->date,
             'description' => $description,
             'status'      => 'pending',
             'created_at'  => $now,
             'updated_at'  => $now,
-        ]);
+        ];
+        if ($request->hasFile('proof') && \App\Services\SchemaCache::has('online_submissions', 'proof_path')) {
+            $f = $request->file('proof');
+            $row['proof_path'] = \App\Services\PrivateFiles::store($f, 'online-proofs');
+            $row['proof_name'] = mb_substr($f->getClientOriginalName(), 0, 200);
+        }
+        $id = DB::table('online_submissions')->insertGetId($row);
 
         // the intern's supervisor confirms it first (the coordinators, if no supervisor is assigned)
         $intern = DB::table('users')->where('id', $request->user_id)->first();
@@ -144,6 +155,8 @@ class OnlineSubmissionController extends Controller
                 'os.description',
                 'os.status',
                 'os.endorse_remarks',
+                'os.proof_path',
+                'os.proof_name',
                 DB::raw('(SELECT vl.remarks FROM validation_logs vl
                           WHERE vl.submission_id = os.id
                           ORDER BY vl.created_at DESC LIMIT 1) as remarks')
@@ -168,6 +181,7 @@ class OnlineSubmissionController extends Controller
         }
 
         DB::table('online_submissions')->where('id', $id)->delete();
+        if (!empty($row->proof_path)) \App\Services\PrivateFiles::delete($row->proof_path);   // its proof goes too
         return response()->json(['message' => 'Submission removed.']);
     }
 
@@ -198,7 +212,7 @@ class OnlineSubmissionController extends Controller
             ->whereIn('os.status', ['approved', 'rejected'])
             ->orderByDesc('os.updated_at')
             ->select(
-                'os.id', 'os.user_id', 'os.date', 'os.description', 'os.status', 'os.endorsed_by', 'os.endorse_remarks',
+                'os.id', 'os.user_id', 'os.date', 'os.description', 'os.status', 'os.endorsed_by', 'os.endorse_remarks', 'os.proof_path', 'os.proof_name',
                 'os.created_at as submitted_at', 'e.name as endorser_name',
                 DB::raw("CASE WHEN os.status = 'rejected' AND EXISTS (SELECT 1 FROM validation_logs vl2 WHERE vl2.submission_id = os.id AND vl2.supervisor_id = os.endorsed_by) THEN 'supervisor' WHEN os.status = 'rejected' THEN 'coordinator' END as rejected_by"),
                 'u.name as intern_name', 'u.email as intern_email', 'u.photo as intern_photo',

@@ -23,7 +23,7 @@ use Illuminate\Support\Facades\URL;
  */
 class PrivateFiles
 {
-    public const FOLDERS = ['movs', 'evaluations', 'excuse-proofs', 'correction-proofs', 'signatures', 'work_mode'];
+    public const FOLDERS = ['movs', 'evaluations', 'excuse-proofs', 'correction-proofs', 'online-proofs', 'signatures', 'work_mode'];
     public const LINK_MINUTES = 10;
 
     public static function isPrivate(?string $path): bool
