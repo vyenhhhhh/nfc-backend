@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Carbon\Carbon;
 
 class AttendanceController extends Controller
@@ -143,10 +144,16 @@ class AttendanceController extends Controller
         'uid'           => 'nullable|string|max:64|unique:nfc_cards,uid',
         'work_mode'     => 'nullable|in:onsite,offsite',
         'tracking_type' => 'nullable|in:hours,output',
+        'photo'         => 'nullable|image|max:2048',
     ]);
 
     $now = Carbon::now('Asia/Manila');
 
+$photoPath = null;
+
+if ($request->hasFile('photo')) {
+    $photoPath = $request->file('photo')->store('profiles', 'public');
+}
     $userId = DB::table('users')->insertGetId([
         'name'          => $request->name,
         'email'         => $request->email,
@@ -154,6 +161,7 @@ class AttendanceController extends Controller
         'role'          => $request->role,
         'work_mode'     => $request->role === 'intern' ? ($request->work_mode ?? 'onsite') : 'onsite',
         'tracking_type' => $request->role === 'intern' ? ($request->tracking_type ?? 'hours') : 'hours',
+        'photo'         => $photoPath,
         'created_at'    => $now,
     ]);
 
@@ -216,5 +224,35 @@ public function updateSettings(Request $request, $id)
     ]);
 
     return response()->json(['message' => 'Intern settings updated.']);
+}
+// ── Update User Photo ─────────────────────────────────
+public function updatePhoto(Request $request, $id)
+{
+    $request->validate([
+        'photo' => 'required|image|max:2048',
+    ]);
+
+    $user = DB::table('users')->where('id', $id)->first();
+
+    if (!$user) {
+        return response()->json(['message' => 'User not found.'], 404);
+    }
+
+    if ($user->photo) {
+        Storage::disk('public')->delete($user->photo);
+    }
+
+    $photoPath = $request->file('photo')->store('profiles', 'public');
+
+    DB::table('users')
+        ->where('id', $id)
+        ->update([
+            'photo' => $photoPath,
+        ]);
+
+    return response()->json([
+        'message' => 'Photo updated.',
+        'photo'  => $photoPath,
+    ]);
 }
 }

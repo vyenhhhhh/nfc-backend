@@ -5,6 +5,7 @@ use App\Http\Controllers\AttendanceController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\OnlineSubmissionController;
 use App\Http\Controllers\MovController;
+use App\Http\Controllers\NfcRequestController;
 
 // Auth
 Route::post('/login', [AuthController::class, 'login']);
@@ -23,10 +24,13 @@ Route::get('/supervisor/pending',    [OnlineSubmissionController::class, 'pendin
 Route::post('/supervisor/validate',  [OnlineSubmissionController::class, 'validate']);
 
 // Admin
-Route::get('/admin/all-attendance',  [AttendanceController::class, 'allAttendance']);
-Route::get('/admin/users',           [AttendanceController::class, 'allUsers']);
-Route::post('/admin/users',          [AttendanceController::class, 'addUser']);
-Route::delete('/admin/users/{id}',   [AttendanceController::class, 'deleteUser']);
+Route::post('/admin/users/{id}/photo', [AttendanceController::class, 'updatePhoto']);
+Route::get('/admin/all-attendance', [AttendanceController::class, 'allAttendance']);
+Route::get('/admin/users', [AttendanceController::class, 'allUsers']);
+Route::get('/intern/nfc-request', [NfcRequestController::class, 'mine']);
+Route::post('/intern/nfc-request', [NfcRequestController::class, 'store']);
+Route::get('/supervisor/nfc-requests', [NfcRequestController::class, 'index']);
+Route::post('/supervisor/nfc-requests/{id}/review', [NfcRequestController::class, 'review']);
 
 // Intern MOV submissions
 Route::post('/intern/submit-mov', [MovController::class, 'submit']);
