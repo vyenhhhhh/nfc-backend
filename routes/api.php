@@ -6,6 +6,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\OnlineSubmissionController;
 use App\Http\Controllers\MovController;
 use App\Http\Controllers\NfcRequestController;
+use App\Http\Controllers\CalendarController;
 
 // Auth
 Route::post('/login', [AuthController::class, 'login']);
@@ -42,3 +43,9 @@ Route::post('/coordinator/movs/{id}/review', [MovController::class, 'review']);
 
 // Update intern work settings (admin, supervisor, coordinator)
 Route::patch('/users/{id}/settings', [AttendanceController::class, 'updateSettings']);
+
+// Calendar
+Route::get('/calendar', [CalendarController::class, 'index']);
+Route::post('/calendar', [CalendarController::class, 'store']);
+Route::put('/calendar/{id}', [CalendarController::class, 'update']);
+Route::delete('/calendar/{id}', [CalendarController::class, 'destroy']);
