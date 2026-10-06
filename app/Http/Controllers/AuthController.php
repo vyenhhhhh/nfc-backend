@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 
 class AuthController extends Controller
 {
@@ -14,15 +15,9 @@ class AuthController extends Controller
             'password' => 'required|string',
         ]);
 
-        $user = DB::table('users')
-            ->where('email', $request->email)
-            ->first();
+        $user = DB::table('users')->where('email', $request->email)->first();
 
-        if (!$user) {
-            return response()->json(['message' => 'Invalid email or password.'], 401);
-        }
-
-        if ($request->password !== $user->password) {
+        if (!$user || !Hash::check($request->password, $user->password)) {
             return response()->json(['message' => 'Invalid email or password.'], 401);
         }
 
@@ -33,6 +28,7 @@ class AuthController extends Controller
             'name'          => $user->name,
             'email'         => $user->email,
             'role'          => $user->role,
+            'photo'         => $user->photo ?? null,
             'work_mode'     => $user->work_mode ?? 'onsite',
             'tracking_type' => $user->tracking_type ?? 'hours',
             'has_card'      => $hasCard,
@@ -41,13 +37,13 @@ class AuthController extends Controller
 
     public function me(Request $request)
     {
-        $userId = $request->query('user_id');
-        $user   = DB::table('users')->where('id', $userId)->first();
+        $user = DB::table('users')->where('id', $request->query('user_id'))->first();
 
         if (!$user) {
             return response()->json(['message' => 'User not found.'], 404);
         }
 
+        unset($user->password);
         return response()->json($user);
     }
 }

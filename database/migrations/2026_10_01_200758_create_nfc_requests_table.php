@@ -8,31 +8,22 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::table('nfc_requests', function (Blueprint $table) {
-            $table->unsignedBigInteger('user_id')->after('id');
-            $table->string('type', 50)->after('user_id');
-            $table->text('notes')->nullable()->after('type');
-            $table->string('status', 20)->default('pending')->after('notes');
-            $table->text('remarks')->nullable()->after('status');
-            $table->string('uid', 100)->nullable()->after('remarks');
-            $table->unsignedBigInteger('reviewed_by')->nullable()->after('uid');
-            $table->timestamp('reviewed_at')->nullable()->after('reviewed_by');
+        Schema::create('nfc_requests', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('user_id')->index();
+            $table->string('type', 50);
+            $table->text('notes')->nullable();
+            $table->string('status', 20)->default('pending');
+            $table->text('remarks')->nullable();
+            $table->string('uid', 100)->nullable();
+            $table->unsignedBigInteger('reviewed_by')->nullable();
+            $table->timestamp('reviewed_at')->nullable();
+            $table->timestamps();
         });
     }
 
     public function down(): void
     {
-        Schema::table('nfc_requests', function (Blueprint $table) {
-            $table->dropColumn([
-                'user_id',
-                'type',
-                'notes',
-                'status',
-                'remarks',
-                'uid',
-                'reviewed_by',
-                'reviewed_at',
-            ]);
-        });
+        Schema::dropIfExists('nfc_requests');
     }
 };

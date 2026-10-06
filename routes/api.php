@@ -7,6 +7,7 @@ use App\Http\Controllers\OnlineSubmissionController;
 use App\Http\Controllers\MovController;
 use App\Http\Controllers\NfcRequestController;
 use App\Http\Controllers\CalendarController;
+use App\Http\Controllers\NotificationController;
 
 // Auth
 Route::post('/login', [AuthController::class, 'login']);
@@ -28,6 +29,8 @@ Route::post('/supervisor/validate',  [OnlineSubmissionController::class, 'valida
 Route::post('/admin/users/{id}/photo', [AttendanceController::class, 'updatePhoto']);
 Route::get('/admin/all-attendance', [AttendanceController::class, 'allAttendance']);
 Route::get('/admin/users', [AttendanceController::class, 'allUsers']);
+Route::post('/admin/users', [AttendanceController::class, 'addUser']);
+Route::delete('/admin/users/{id}', [AttendanceController::class, 'deleteUser']);
 Route::get('/intern/nfc-request', [NfcRequestController::class, 'mine']);
 Route::post('/intern/nfc-request', [NfcRequestController::class, 'store']);
 Route::get('/supervisor/nfc-requests', [NfcRequestController::class, 'index']);
@@ -49,3 +52,6 @@ Route::get('/calendar', [CalendarController::class, 'index']);
 Route::post('/calendar', [CalendarController::class, 'store']);
 Route::put('/calendar/{id}', [CalendarController::class, 'update']);
 Route::delete('/calendar/{id}', [CalendarController::class, 'destroy']);
+
+Route::get('/notifications', [NotificationController::class, 'index']);
+Route::patch('/notifications/{id}/read', [NotificationController::class, 'markRead']);
