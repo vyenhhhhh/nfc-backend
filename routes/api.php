@@ -20,6 +20,7 @@ Route::get('/today',  [AttendanceController::class, 'today']);
 // Intern
 Route::get('/intern/attendance',     [AttendanceController::class, 'internAttendance']);
 Route::post('/intern/submit-online', [OnlineSubmissionController::class, 'submit']);
+Route::get('/intern/my-online',      [OnlineSubmissionController::class, 'mine']);   // <-- new
 
 // Supervisor
 Route::get('/supervisor/pending',    [OnlineSubmissionController::class, 'pending']);

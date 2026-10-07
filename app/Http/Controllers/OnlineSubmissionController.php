@@ -46,6 +46,30 @@ class OnlineSubmissionController extends Controller
         ]);
     }
 
+    // Intern sees their own online submissions (NEW)
+    public function mine(Request $request)
+    {
+        $request->validate([
+            'user_id' => 'required|integer',
+        ]);
+
+        $submissions = DB::table('online_submissions as os')
+            ->where('os.user_id', $request->user_id)
+            ->orderByDesc('os.date')
+            ->select(
+                'os.id',
+                'os.date',
+                'os.description',
+                'os.status',
+                DB::raw('(SELECT vl.remarks FROM validation_logs vl
+                          WHERE vl.submission_id = os.id
+                          ORDER BY vl.created_at DESC LIMIT 1) as remarks')
+            )
+            ->get();
+
+        return response()->json($submissions);
+    }
+
     // Supervisor gets pending submissions
     public function pending(Request $request)
     {
