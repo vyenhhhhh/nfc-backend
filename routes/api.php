@@ -8,6 +8,7 @@ use App\Http\Controllers\MovController;
 use App\Http\Controllers\NfcRequestController;
 use App\Http\Controllers\CalendarController;
 use App\Http\Controllers\NotificationController;
+use App\Http\Controllers\AnnouncementController;
 
 // Auth
 Route::post('/login', [AuthController::class, 'login']);
@@ -32,6 +33,7 @@ Route::get('/admin/all-attendance', [AttendanceController::class, 'allAttendance
 Route::get('/admin/users', [AttendanceController::class, 'allUsers']);
 Route::post('/admin/users', [AttendanceController::class, 'addUser']);
 Route::delete('/admin/users/{id}', [AttendanceController::class, 'deleteUser']);
+Route::patch('/admin/users/{id}', [AttendanceController::class, 'updateUser']);
 Route::get('/intern/nfc-request', [NfcRequestController::class, 'mine']);
 Route::post('/intern/nfc-request', [NfcRequestController::class, 'store']);
 Route::get('/supervisor/nfc-requests', [NfcRequestController::class, 'index']);
@@ -54,5 +56,11 @@ Route::post('/calendar', [CalendarController::class, 'store']);
 Route::put('/calendar/{id}', [CalendarController::class, 'update']);
 Route::delete('/calendar/{id}', [CalendarController::class, 'destroy']);
 
+// Announcements (coordinator / admin post, interns read)
+Route::get('/announcements', [AnnouncementController::class, 'index']);
+Route::post('/announcements', [AnnouncementController::class, 'store']);
+Route::delete('/announcements/{id}', [AnnouncementController::class, 'destroy']);
+
+// Notifications (the bell)
 Route::get('/notifications', [NotificationController::class, 'index']);
 Route::patch('/notifications/{id}/read', [NotificationController::class, 'markRead']);

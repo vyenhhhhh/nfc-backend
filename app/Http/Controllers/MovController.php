@@ -1,7 +1,8 @@
 <?php
-
+//MovController.php
 namespace App\Http\Controllers;
 
+use App\Services\Notifier;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -29,6 +30,15 @@ class MovController extends Controller
             'created_at'    => Carbon::now(),
             'updated_at'    => Carbon::now(),
         ]);
+
+        // Notify the OJT coordinators
+        $intern = DB::table('users')->where('id', $request->user_id)->first();
+        Notifier::toRoles(
+            ['ojt_coordinator'],
+            'New MOV Submitted',
+            ($intern->name ?? 'An intern') . ' submitted "' . $request->title . '" for review.',
+            'mov_submission'
+        );
 
         return response()->json(['message' => 'MOV submitted successfully.', 'id' => $id]);
     }
@@ -75,6 +85,15 @@ class MovController extends Controller
             'reviewed_at' => Carbon::now(),
             'updated_at'  => Carbon::now(),
         ]);
+
+        // Notify the intern about the decision
+        Notifier::toUser(
+            $mov->user_id,
+            $request->status === 'approved' ? 'MOV Approved' : 'MOV Rejected',
+            'Your "' . $mov->title . '" was ' . $request->status . '.'
+                . ($request->remarks ? ' Remarks: ' . $request->remarks : ''),
+            'mov_review'
+        );
 
         return response()->json(['message' => 'Submission ' . $request->status . '.']);
     }

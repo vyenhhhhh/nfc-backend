@@ -1,13 +1,22 @@
 <?php
-
+//CalendarController.php
 namespace App\Http\Controllers;
 
+use App\Services\Notifier;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
 
 class CalendarController extends Controller
 {
+    // Who should hear about calendar changes (the person who made the change is skipped)
+    private const AUDIENCE = ['intern', 'ojt_coordinator', 'supervisor'];
+
+    private function friendly($date): string
+    {
+        return Carbon::parse($date)->format('M j, Y');
+    }
+
     // Get all calendar events
     public function index()
     {
@@ -48,6 +57,14 @@ class CalendarController extends Controller
             'created_at'  => Carbon::now('Asia/Manila'),
             'updated_at'  => Carbon::now('Asia/Manila'),
         ]);
+
+        Notifier::toRoles(
+            self::AUDIENCE,
+            $request->type === 'holiday' ? 'New Holiday' : 'New Non-working Day',
+            $request->title . ' · ' . $this->friendly($request->date),
+            'calendar',
+            $request->created_by ? (int) $request->created_by : null
+        );
 
         return response()->json([
             'message' => 'Calendar event added successfully.',
@@ -96,6 +113,14 @@ class CalendarController extends Controller
                 'updated_at'  => Carbon::now('Asia/Manila'),
             ]);
 
+        Notifier::toRoles(
+            self::AUDIENCE,
+            'Calendar Event Updated',
+            $request->title . ' · ' . $this->friendly($request->date),
+            'calendar',
+            $event->created_by ? (int) $event->created_by : null
+        );
+
         return response()->json([
             'message' => 'Calendar event updated successfully.'
         ]);
@@ -117,6 +142,14 @@ class CalendarController extends Controller
         DB::table('calendar_events')
             ->where('id', $id)
             ->delete();
+
+        Notifier::toRoles(
+            self::AUDIENCE,
+            'Calendar Event Removed',
+            $event->title . ' · ' . $this->friendly($event->date),
+            'calendar',
+            $event->created_by ? (int) $event->created_by : null
+        );
 
         return response()->json([
             'message' => 'Calendar event deleted successfully.'

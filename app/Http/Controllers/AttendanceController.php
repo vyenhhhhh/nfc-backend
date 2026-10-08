@@ -126,7 +126,7 @@ class AttendanceController extends Controller
         );
     }
 
-    // ── All Users ─────────────────────────────────────────
+    // ── All Users (with the NFC card UID, if any) ─────────
     public function allUsers()
     {
         return response()->json(
@@ -139,86 +139,183 @@ class AttendanceController extends Controller
     }
 
     // ── Add User (with optional NFC card registration) ────
-public function addUser(Request $request)
-{
-    $data = $request->validate([
-        'first_name'     => 'required|string|max:100',
-        'middle_name'    => 'nullable|string|max:100',
-        'last_name'      => 'required|string|max:100',
-        'student_id'     => 'nullable|required_if:role,intern|string|max:50|unique:users,student_id',
-        'contact_number' => 'nullable|string|max:20',
-        'address'        => 'nullable|string|max:255',
-        'placement' => 'nullable|required_if:role,intern|string|max:150',
-        'semester'  => 'nullable|required_if:role,intern|in:1st Semester,2nd Semester',
-        'program'   => 'nullable|required_if:role,intern|in:BSIT - 4,BSCS - 4,BSIS - 4',
-        'email'          => 'required|email|unique:users,email',
-        'password'       => 'required|string|min:6',
-        'role'           => 'required|in:intern,supervisor,admin,ojt_coordinator',
-        'uid'            => 'nullable|string|max:64|unique:nfc_cards,uid',
-        'work_mode'      => 'nullable|in:onsite,offsite',
-        'tracking_type'  => 'nullable|in:hours,output',
-        'photo'          => 'nullable|image|max:2048',
-    ]);
-
-    // Build the full name so the rest of the dashboard keeps working
-    $fullName = trim(implode(' ', array_filter([
-        $data['first_name'],
-        $data['middle_name'] ?? null,
-        $data['last_name'],
-    ])));
-
-    $isIntern = $data['role'] === 'intern';
-
-    $now = Carbon::now('Asia/Manila');
-
-    $photoPath = null;
-    if ($request->hasFile('photo')) {
-        $photoPath = $request->file('photo')->store('profiles', 'public');
-    }
-
-    $userId = DB::table('users')->insertGetId([
-        'name'           => $fullName,
-        'first_name'     => $data['first_name'],
-        'middle_name'    => $data['middle_name'] ?? null,
-        'last_name'      => $data['last_name'],
-        'email'          => $data['email'],
-        'student_id'     => $data['role'] === 'intern' ? ($data['student_id'] ?? null) : null,
-        'contact_number' => $data['contact_number'] ?? null,
-        'address'        => $data['address'] ?? null,
-        'placement' => $isIntern ? ($data['placement'] ?? null) : null,
-        'semester'  => $isIntern ? ($data['semester'] ?? null) : null,
-        'program'   => $isIntern ? ($data['program'] ?? null) : null,
-        'college'   => $isIntern ? 'CCIS' : null,
-        'password'       => Hash::make($data['password']),
-        'role'           => $data['role'],
-        'work_mode'      => $data['role'] === 'intern' ? ($data['work_mode'] ?? 'onsite') : 'onsite',
-        'tracking_type'  => $data['role'] === 'intern' ? ($data['tracking_type'] ?? 'hours') : 'hours',
-        'photo'          => $photoPath,
-        'created_at'     => $now,
-        'updated_at'     => $now,
-    ]);
-
-    $nfcRegistered = false;
-
-    if (!empty($data['uid']) && $data['role'] === 'intern') {
-        DB::table('nfc_cards')->insert([
-            'user_id'    => $userId,
-            'uid'        => strtoupper(trim($data['uid'])),
-            'created_at' => $now,
+    public function addUser(Request $request)
+    {
+        $data = $request->validate([
+            'first_name'     => 'required|string|max:100',
+            'middle_name'    => 'nullable|string|max:100',
+            'last_name'      => 'required|string|max:100',
+            'student_id'     => 'nullable|required_if:role,intern|string|max:50|unique:users,student_id',
+            'contact_number' => 'nullable|string|max:20',
+            'address'        => 'nullable|string|max:255',
+            'placement'      => 'nullable|required_if:role,intern|string|max:150',
+            'semester'       => 'nullable|required_if:role,intern|in:1st Semester,2nd Semester',
+            'program'        => 'nullable|required_if:role,intern|in:BSIT - 4,BSCS - 4,BSIS - 4',
+            'email'          => 'required|email|unique:users,email',
+            'password'       => 'required|string|min:6',
+            'role'           => 'required|in:intern,supervisor,admin,ojt_coordinator',
+            'uid'            => 'nullable|string|max:64|unique:nfc_cards,uid',
+            'work_mode'      => 'nullable|in:onsite,offsite',
+            'tracking_type'  => 'nullable|in:hours,output',
+            'photo'          => 'nullable|image|max:2048',
         ]);
-        $nfcRegistered = true;
+
+        // Build the full name so the rest of the dashboard keeps working
+        $fullName = trim(implode(' ', array_filter([
+            $data['first_name'],
+            $data['middle_name'] ?? null,
+            $data['last_name'],
+        ])));
+
+        $isIntern = $data['role'] === 'intern';
+
+        $now = Carbon::now('Asia/Manila');
+
+        $photoPath = null;
+        if ($request->hasFile('photo')) {
+            $photoPath = $request->file('photo')->store('profiles', 'public');
+        }
+
+        $userId = DB::table('users')->insertGetId([
+            'name'           => $fullName,
+            'first_name'     => $data['first_name'],
+            'middle_name'    => $data['middle_name'] ?? null,
+            'last_name'      => $data['last_name'],
+            'email'          => $data['email'],
+            'student_id'     => $isIntern ? ($data['student_id'] ?? null) : null,
+            'contact_number' => $data['contact_number'] ?? null,
+            'address'        => $data['address'] ?? null,
+            'placement'      => $isIntern ? ($data['placement'] ?? null) : null,
+            'semester'       => $isIntern ? ($data['semester'] ?? null) : null,
+            'program'        => $isIntern ? ($data['program'] ?? null) : null,
+            'college'        => $isIntern ? 'CCIS' : null,
+            'password'       => Hash::make($data['password']),
+            'role'           => $data['role'],
+            'work_mode'      => $isIntern ? ($data['work_mode'] ?? 'onsite') : 'onsite',
+            'tracking_type'  => $isIntern ? ($data['tracking_type'] ?? 'hours') : 'hours',
+            'photo'          => $photoPath,
+            'created_at'     => $now,
+            'updated_at'     => $now,
+        ]);
+
+        $nfcRegistered = false;
+
+        if (!empty($data['uid']) && $isIntern) {
+            DB::table('nfc_cards')->insert([
+                'user_id'    => $userId,
+                'uid'        => strtoupper(trim($data['uid'])),
+                'created_at' => $now,
+            ]);
+            $nfcRegistered = true;
+        }
+
+        $message = 'User added successfully.';
+        if ($nfcRegistered) {
+            $message .= ' NFC card (UID: ' . strtoupper(trim($data['uid'])) . ') registered.';
+        }
+
+        return response()->json([
+            'message' => $message,
+            'id'      => $userId,
+        ]);
     }
 
-    $message = 'User added successfully.';
-    if ($nfcRegistered) {
-        $message .= ' NFC card (UID: ' . strtoupper(trim($data['uid'])) . ') registered.';
-    }
+    // ── Update User (Manage Accounts → Edit) ──────────────
+    public function updateUser(Request $request, $id)
+    {
+        $user = DB::table('users')->where('id', $id)->first();
+        if (!$user) {
+            return response()->json(['message' => 'User not found.'], 404);
+        }
 
-    return response()->json([
-        'message' => $message,
-        'id'      => $userId,
-    ]);
-}
+        $data = $request->validate([
+            'first_name'     => 'required|string|max:100',
+            'middle_name'    => 'nullable|string|max:100',
+            'last_name'      => 'required|string|max:100',
+            'email'          => 'sometimes|required|email|unique:users,email,' . $id,
+            'student_id'     => 'nullable|string|max:50|unique:users,student_id,' . $id,
+            'contact_number' => 'nullable|string|max:20',
+            'address'        => 'nullable|string|max:255',
+            'program'        => 'nullable|in:BSIT - 4,BSCS - 4,BSIS - 4',
+            'semester'       => 'nullable|in:1st Semester,2nd Semester',
+            'placement'      => 'nullable|string|max:150',
+            'work_mode'      => 'nullable|in:onsite,offsite',
+            'tracking_type'  => 'nullable|in:hours,output',
+            'uid'            => 'nullable|string|max:64',
+        ]);
+
+        $isIntern = $user->role === 'intern';
+        $uid      = strtoupper(trim($data['uid'] ?? ''));
+
+        // the card can't already belong to someone else
+        if ($isIntern && $uid !== '') {
+            $taken = DB::table('nfc_cards')
+                ->where('uid', $uid)
+                ->where('user_id', '!=', $id)
+                ->exists();
+
+            if ($taken) {
+                return response()->json([
+                    'message' => "Card UID [{$uid}] is already assigned to another user.",
+                ], 422);
+            }
+        }
+
+        $fullName = trim(implode(' ', array_filter([
+            $data['first_name'], $data['middle_name'] ?? null, $data['last_name'],
+        ])));
+
+        $update = [
+            'name'           => $fullName,
+            'first_name'     => $data['first_name'],
+            'middle_name'    => $data['middle_name'] ?? null,
+            'last_name'      => $data['last_name'],
+            'email'          => $data['email'] ?? $user->email,
+            'contact_number' => $data['contact_number'] ?? null,
+            'address'        => $data['address'] ?? null,
+            'updated_at'     => Carbon::now('Asia/Manila'),
+        ];
+
+        if ($isIntern) {
+            $update['student_id']    = $data['student_id'] ?? null;
+            $update['program']       = $data['program'] ?? null;
+            $update['semester']      = $data['semester'] ?? null;
+            $update['placement']     = $data['placement'] ?? null;
+            $update['college']       = 'CCIS';
+            $update['work_mode']     = $data['work_mode'] ?? $user->work_mode;
+            $update['tracking_type'] = $data['tracking_type'] ?? $user->tracking_type;
+        }
+
+        try {
+            DB::transaction(function () use ($id, $update, $isIntern, $uid) {
+                DB::table('users')->where('id', $id)->update($update);
+
+                if ($isIntern) {
+                    $card = DB::table('nfc_cards')->where('user_id', $id)->first();
+
+                    if ($uid === '') {
+                        // field cleared: unlink the card
+                        DB::table('nfc_cards')->where('user_id', $id)->delete();
+                    } elseif ($card) {
+                        DB::table('nfc_cards')->where('user_id', $id)->update(['uid' => $uid]);
+                    } else {
+                        DB::table('nfc_cards')->insert([
+                            'user_id'    => $id,
+                            'uid'        => $uid,
+                            'created_at' => Carbon::now('Asia/Manila'),
+                        ]);
+                    }
+                }
+            });
+        } catch (\Throwable $e) {
+            return response()->json(['message' => 'Database error: ' . $e->getMessage()], 500);
+        }
+
+        return response()->json([
+            'message' => 'User updated.',
+            'name'    => $fullName,
+        ]);
+    }
 
     // ── Delete User ───────────────────────────────────────
     public function deleteUser($id)
@@ -292,87 +389,4 @@ public function addUser(Request $request)
             'photo'   => $photoPath,
         ]);
     }
-    // ── Update User Profile (Monitor Interns → Edit) ──────
-public function updateUser(Request $request, $id)
-{
-    $user = DB::table('users')->where('id', $id)->first();
-    if (!$user) {
-        return response()->json(['message' => 'User not found.'], 404);
-    }
-
-    $data = $request->validate([
-        'first_name'     => 'required|string|max:100',
-        'middle_name'    => 'nullable|string|max:100',
-        'last_name'      => 'required|string|max:100',
-        'contact_number' => 'nullable|string|max:20',
-        'address'        => 'nullable|string|max:255',
-        'program'        => 'nullable|in:BSIT - 4,BSCS - 4,BSIS - 4',
-        'semester'       => 'nullable|in:1st Semester,2nd Semester',
-        'placement'      => 'nullable|string|max:150',
-        'work_mode'      => 'nullable|in:onsite,offsite',
-        'tracking_type'  => 'nullable|in:hours,output',
-        'uid'            => 'nullable|string|max:64',
-    ]);
-
-    $isIntern = $user->role === 'intern';
-    $uid      = strtoupper(trim($data['uid'] ?? ''));
-
-    // the card can't already belong to someone else
-    if ($isIntern && $uid !== '') {
-        $taken = DB::table('nfc_cards')
-            ->where('uid', $uid)
-            ->where('user_id', '!=', $id)
-            ->exists();
-
-        if ($taken) {
-            return response()->json([
-                'message' => "Card UID [{$uid}] is already assigned to another user.",
-            ], 422);
-        }
-    }
-
-    $update = [
-        'name'           => trim(implode(' ', array_filter([
-            $data['first_name'], $data['middle_name'] ?? null, $data['last_name'],
-        ]))),
-        'first_name'     => $data['first_name'],
-        'middle_name'    => $data['middle_name'] ?? null,
-        'last_name'      => $data['last_name'],
-        'contact_number' => $data['contact_number'] ?? null,
-        'address'        => $data['address'] ?? null,
-        'updated_at'     => Carbon::now('Asia/Manila'),
-    ];
-
-    if ($isIntern) {
-        $update['program']       = $data['program'] ?? null;
-        $update['semester']      = $data['semester'] ?? null;
-        $update['placement']     = $data['placement'] ?? null;
-        $update['college']       = 'CCIS';
-        $update['work_mode']     = $data['work_mode'] ?? $user->work_mode;
-        $update['tracking_type'] = $data['tracking_type'] ?? $user->tracking_type;
-    }
-
-    DB::transaction(function () use ($id, $update, $isIntern, $uid) {
-        DB::table('users')->where('id', $id)->update($update);
-
-        if ($isIntern) {
-            $card = DB::table('nfc_cards')->where('user_id', $id)->first();
-
-            if ($uid === '') {
-                // field cleared: unlink the card
-                DB::table('nfc_cards')->where('user_id', $id)->delete();
-            } elseif ($card) {
-                DB::table('nfc_cards')->where('user_id', $id)->update(['uid' => $uid]);
-            } else {
-                DB::table('nfc_cards')->insert([
-                    'user_id'    => $id,
-                    'uid'        => $uid,
-                    'created_at' => Carbon::now('Asia/Manila'),
-                ]);
-            }
-        }
-    });
-
-    return response()->json(['message' => 'Profile updated.']);
-}
 }

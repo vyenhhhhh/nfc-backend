@@ -1,7 +1,8 @@
 <?php
-
+//OnlineSubmissionController.php
 namespace App\Http\Controllers;
 
+use App\Services\Notifier;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
@@ -39,6 +40,16 @@ class OnlineSubmissionController extends Controller
             'created_at'  => $now,
             'updated_at'  => $now,
         ]);
+
+        // Notify the OJT coordinators
+        $intern = DB::table('users')->where('id', $request->user_id)->first();
+        Notifier::toRoles(
+            ['ojt_coordinator'],
+            'New Online Attendance',
+            ($intern->name ?? 'An intern') . ' submitted online attendance for '
+                . Carbon::parse($request->date)->format('M j, Y') . '.',
+            'online_submission'
+        );
 
         return response()->json([
             'message' => 'Online attendance submitted successfully.',
@@ -134,6 +145,16 @@ class OnlineSubmissionController extends Controller
                 'updated_at'     => $now,
             ]);
         }
+
+        // Notify the intern about the decision
+        $when = Carbon::parse($submission->date)->format('M j, Y');
+        Notifier::toUser(
+            $submission->user_id,
+            $request->action === 'approved' ? 'Online Attendance Approved' : 'Online Attendance Rejected',
+            'Your online attendance for ' . $when . ' was ' . $request->action . '.'
+                . ($request->remarks ? ' Remarks: ' . $request->remarks : ''),
+            'online_review'
+        );
 
         return response()->json([
             'message' => 'Submission ' . $request->action . ' successfully.',
