@@ -2,9 +2,12 @@
 
 namespace App\Http\Controllers;
 
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 
 class AuthController extends Controller
 {
@@ -21,7 +24,53 @@ class AuthController extends Controller
             return response()->json(['message' => 'Invalid email or password.'], 401);
         }
 
+        return $this->session($user);
+    }
+
+    // Sign in with Google: the account must already exist (created by the admin) with the same email
+    public function googleLogin(Request $request)
+    {
+        $request->validate(['access_token' => 'required|string']);
+        $clientId = env('GOOGLE_CLIENT_ID');
+        if (!$clientId) {
+            return response()->json(['message' => 'Google sign-in is not set up yet.'], 503);
+        }
+
+        // 1. the token must have been issued to OUR app
+        $info = Http::get('https://oauth2.googleapis.com/tokeninfo', ['access_token' => $request->access_token]);
+        if (!$info->ok() || ($info->json('aud') ?? $info->json('azp')) !== $clientId) {
+            return response()->json(['message' => 'Google sign-in failed.'], 401);
+        }
+
+        // 2. read the Google account's email
+        $g = Http::withToken($request->access_token)->get('https://www.googleapis.com/oauth2/v3/userinfo');
+        $email = strtolower($g->json('email') ?? '');
+        if (!$g->ok() || !$email || !$g->json('email_verified')) {
+            return response()->json(['message' => 'Google sign-in failed.'], 401);
+        }
+
+        // 3. only accounts that already exist can sign in
+        $user = DB::table('users')->whereRaw('lower(email) = ?', [$email])->first();
+        if (!$user) {
+            return response()->json(['message' => "No MyTrack account uses $email. Ask your administrator to add it."], 403);
+        }
+        return $this->session($user);
+    }
+
+    private function session($user)
+    {
         $hasCard = DB::table('nfc_cards')->where('user_id', $user->id)->exists();
+
+        // Sign-in token: the browser keeps the token, the database keeps only its hash
+        $token = Str::random(64);
+        $now   = Carbon::now();
+        DB::table('api_tokens')->where('user_id', $user->id)->where('expires_at', '<', $now)->delete();
+        DB::table('api_tokens')->insert([
+            'user_id'    => $user->id,
+            'token_hash' => hash('sha256', $token),
+            'expires_at' => $now->copy()->addDays(8),
+            'created_at' => $now,
+        ]);
 
         return response()->json([
             'id'            => $user->id,
@@ -32,6 +81,7 @@ class AuthController extends Controller
             'work_mode'     => $user->work_mode ?? 'onsite',
             'tracking_type' => $user->tracking_type ?? 'hours',
             'has_card'      => $hasCard,
+            'token'         => $token,
         ]);
     }
 
@@ -45,5 +95,15 @@ class AuthController extends Controller
 
         unset($user->password);
         return response()->json($user);
+    }
+
+    // Sign out: the token stops working right away
+    public function logout(Request $request)
+    {
+        $auth = $request->attributes->get('auth_user');
+        if ($auth) {
+            DB::table('api_tokens')->where('id', $auth->token_id)->delete();
+        }
+        return response()->json(['message' => 'Signed out.']);
     }
 }

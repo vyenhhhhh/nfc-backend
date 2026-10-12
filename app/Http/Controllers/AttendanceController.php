@@ -6,6 +6,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Carbon\Carbon;
 
@@ -145,13 +146,14 @@ class AttendanceController extends Controller
             'first_name'     => 'required|string|max:100',
             'middle_name'    => 'nullable|string|max:100',
             'last_name'      => 'required|string|max:100',
-            'student_id'     => 'nullable|required_if:role,intern|string|max:50|unique:users,student_id',
+            'student_id'     => 'required|string|max:50|unique:users,student_id',  // student ID, or employee ID for staff
             'contact_number' => 'nullable|string|max:20',
             'address'        => 'nullable|string|max:255',
             'placement'      => 'nullable|required_if:role,intern|string|max:150',
             'semester'       => 'nullable|required_if:role,intern|in:1st Semester,2nd Semester',
             'program'        => 'nullable|required_if:role,intern|in:BSIT - 4,BSCS - 4,BSIS - 4',
             'email'          => 'required|email|unique:users,email',
+            'date_of_birth'  => 'required|date|before:today',
             'password'       => 'required|string|min:6',
             'role'           => 'required|in:intern,supervisor,admin,ojt_coordinator',
             'uid'            => 'nullable|string|max:64|unique:nfc_cards,uid',
@@ -182,9 +184,10 @@ class AttendanceController extends Controller
             'middle_name'    => $data['middle_name'] ?? null,
             'last_name'      => $data['last_name'],
             'email'          => $data['email'],
-            'student_id'     => $isIntern ? ($data['student_id'] ?? null) : null,
+            'student_id'     => trim($data['student_id']),
             'contact_number' => $data['contact_number'] ?? null,
             'address'        => $data['address'] ?? null,
+            'date_of_birth'  => Carbon::parse($data['date_of_birth'])->toDateString(),
             'placement'      => $isIntern ? ($data['placement'] ?? null) : null,
             'semester'       => $isIntern ? ($data['semester'] ?? null) : null,
             'program'        => $isIntern ? ($data['program'] ?? null) : null,
@@ -242,7 +245,25 @@ class AttendanceController extends Controller
             'work_mode'      => 'nullable|in:onsite,offsite',
             'tracking_type'  => 'nullable|in:hours,output',
             'uid'            => 'nullable|string|max:64',
+            'date_of_birth'  => 'nullable|date|before:today',
+            'password'       => 'nullable|string|min:6|max:100',   // admin sets a new password
         ]);
+
+        // Who is asking (set by the sign-in check on the route)
+        $auth    = $request->attributes->get('auth_user');
+        $isAdmin = $auth && $auth->role === 'admin';
+
+        if ($auth && !$isAdmin) {
+            // interns can't edit accounts; a coordinator may edit interns (or themselves), not other staff
+            if ($auth->role === 'intern'
+                || ($user->role !== 'intern' && (int) $auth->id !== (int) $id)) {
+                return response()->json(['message' => 'You are not allowed to edit this account.'], 403);
+            }
+            // only the admin may change these
+            foreach (['email', 'student_id', 'date_of_birth', 'password'] as $k) {
+                unset($data[$k]);
+            }
+        }
 
         $isIntern = $user->role === 'intern';
         $uid      = strtoupper(trim($data['uid'] ?? ''));
@@ -276,8 +297,19 @@ class AttendanceController extends Controller
             'updated_at'     => Carbon::now('Asia/Manila'),
         ];
 
+        // only touch these when they were actually sent (the profile panel doesn't send them)
+        if (!empty($data['date_of_birth'])) {
+            $update['date_of_birth'] = Carbon::parse($data['date_of_birth'])->toDateString();
+        }
+        if (!empty($data['password'])) {
+            $update['password'] = Hash::make($data['password']);
+        }
+
+        if (isset($data['student_id']) && trim((string) $data['student_id']) !== '') {
+            $update['student_id'] = trim($data['student_id']);   // student ID, or employee ID for staff
+        }
+
         if ($isIntern) {
-            $update['student_id']    = $data['student_id'] ?? null;
             $update['program']       = $data['program'] ?? null;
             $update['semester']      = $data['semester'] ?? null;
             $update['placement']     = $data['placement'] ?? null;
@@ -289,6 +321,11 @@ class AttendanceController extends Controller
         try {
             DB::transaction(function () use ($id, $update, $isIntern, $uid) {
                 DB::table('users')->where('id', $id)->update($update);
+
+                // a new password signs the user out everywhere
+                if (isset($update['password']) && Schema::hasTable('api_tokens')) {
+                    DB::table('api_tokens')->where('user_id', $id)->delete();
+                }
 
                 if ($isIntern) {
                     $card = DB::table('nfc_cards')->where('user_id', $id)->first();
@@ -326,12 +363,44 @@ class AttendanceController extends Controller
             return response()->json(['message' => 'User not found.'], 404);
         }
 
-        // Delete all related data first
-        DB::table('nfc_cards')->where('user_id', $id)->delete();
-        DB::table('tokens')->where('user_id', $id)->delete();
-        DB::table('attendance_records')->where('user_id', $id)->delete();
-        DB::table('online_submissions')->where('user_id', $id)->delete();
-        DB::table('users')->where('id', $id)->delete();
+        try {
+            DB::transaction(function () use ($id) {
+                // Delete everything that belongs to this user first (skips tables that don't exist yet)
+                foreach (['nfc_cards', 'tokens', 'attendance_records', 'online_submissions',
+                          'nfc_requests', 'notifications', 'account_recovery', 'api_tokens'] as $t) {
+                    if (Schema::hasTable($t) && Schema::hasColumn($t, 'user_id')) {
+                        DB::table($t)->where('user_id', $id)->delete();
+                    }
+                }
+
+                // MOVs: remove the uploaded files too
+                if (Schema::hasTable('movs')) {
+                    $files = DB::table('movs')->where('user_id', $id)->pluck('file_path');
+                    foreach ($files as $f) {
+                        if ($f) Storage::disk('public')->delete($f);
+                    }
+                    DB::table('movs')->where('user_id', $id)->delete();
+
+                    // if this user reviewed other people's MOVs, keep those but clear the reviewer
+                    if (Schema::hasColumn('movs', 'reviewed_by')) {
+                        DB::table('movs')->where('reviewed_by', $id)->update(['reviewed_by' => null]);
+                    }
+                }
+
+                // Announcements they posted
+                if (Schema::hasTable('announcements')) {
+                    foreach (['user_id', 'posted_by', 'created_by'] as $col) {
+                        if (Schema::hasColumn('announcements', $col)) {
+                            DB::table('announcements')->where($col, $id)->delete();
+                        }
+                    }
+                }
+
+                DB::table('users')->where('id', $id)->delete();
+            });
+        } catch (\Throwable $e) {
+            return response()->json(['message' => 'Could not delete user: ' . $e->getMessage()], 500);
+        }
 
         return response()->json([
             'message' => "User \"{$user->name}\" deleted successfully.",
@@ -373,7 +442,7 @@ class AttendanceController extends Controller
         }
 
         if ($user->photo) {
-            Storage::disk('public')->delete($user->photo);
+            Storage::disk('public')->delete($user->photo);  
         }
 
         $photoPath = $request->file('photo')->store('profiles', 'public');
