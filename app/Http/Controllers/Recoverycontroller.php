@@ -1,5 +1,5 @@
 <?php
-
+//RecoveryController.php
 namespace App\Http\Controllers;
 
 use Carbon\Carbon;
@@ -63,10 +63,16 @@ class RecoveryController extends Controller
         return DB::table('users')->whereRaw('LOWER(student_id) = ?', [$id])->first();
     }
 
-    /** Signed-in actions: the user must type their current password. */
+    /** Signed-in actions: only your own account, and you must type your current password. */
     private function checkedUser(Request $request)
     {
         $request->validate(['user_id' => 'required|integer', 'password' => 'required|string']);
+
+        $auth = $request->attributes->get('auth_user');
+        if (!$auth || (int) $auth->id !== (int) $request->user_id) {
+            return null;
+        }
+
         $user = DB::table('users')->where('id', $request->user_id)->first();
         if (!$user || !Hash::check($request->password, $user->password)) {
             return null;

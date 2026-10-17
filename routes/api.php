@@ -1,5 +1,5 @@
 <?php
-
+//api.php
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AttendanceController;
 use App\Http\Controllers\AuthController;
@@ -10,6 +10,8 @@ use App\Http\Controllers\CalendarController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\AnnouncementController;
 use App\Http\Controllers\RecoveryController;
+use App\Http\Controllers\OvertimeController;
+use App\Http\Controllers\TimeCorrectionController;
 use App\Http\Middleware\ApiTokenAuth;
 
 // Who may call what (see app/Http/Middleware/ApiTokenAuth.php)
@@ -46,6 +48,14 @@ Route::middleware($anyUser)->group(function () {
     Route::post('/intern/submit-mov',    [MovController::class, 'submit']);
     Route::get('/intern/my-movs',        [MovController::class, 'myMovs']);
 
+    // remove your own pending submission
+    Route::delete('/intern/submit-online/{id}', [OnlineSubmissionController::class, 'destroy']);
+    Route::delete('/intern/submit-mov/{id}',    [MovController::class, 'destroy']);
+
+    // forgot to tap out: ask the coordinator to set the time out
+    Route::get('/intern/time-corrections',  [TimeCorrectionController::class, 'mine']);
+    Route::post('/intern/time-corrections', [TimeCorrectionController::class, 'store']);
+
     // Read-only for everyone
     Route::get('/calendar',      [CalendarController::class, 'index']);
     Route::get('/announcements', [AnnouncementController::class, 'index']);
@@ -53,6 +63,8 @@ Route::middleware($anyUser)->group(function () {
     // Notifications (the bell)
     Route::get('/notifications',             [NotificationController::class, 'index']);
     Route::patch('/notifications/{id}/read', [NotificationController::class, 'markRead']);
+    Route::delete('/notifications/{id}', [NotificationController::class, 'destroy']);
+    Route::delete('/notifications',      [NotificationController::class, 'clear']);
 });
 
 /* ───────── Admin, OJT coordinator, supervisor ───────── */
@@ -61,12 +73,6 @@ Route::middleware($staff)->group(function () {
     Route::get('/admin/all-attendance', [AttendanceController::class, 'allAttendance']);
     Route::get('/admin/users',          [AttendanceController::class, 'allUsers']);
 
-    // online attendance review + NFC card requests
-    Route::get('/supervisor/pending',    [OnlineSubmissionController::class, 'pending']);
-    Route::post('/supervisor/validate',  [OnlineSubmissionController::class, 'validate']);
-    Route::get('/supervisor/nfc-requests', [NfcRequestController::class, 'index']);
-    Route::post('/supervisor/nfc-requests/{id}/review', [NfcRequestController::class, 'review']);
-
     Route::patch('/users/{id}/settings', [AttendanceController::class, 'updateSettings']);
 
     // announcements
@@ -74,10 +80,28 @@ Route::middleware($staff)->group(function () {
     Route::delete('/announcements/{id}', [AnnouncementController::class, 'destroy']);
 });
 
-/* ───────── Admin + OJT coordinator: MOV review ───────── */
+/* ───────── Admin + OJT coordinator: reviews (supervisor stays read-only) ───────── */
 Route::middleware($coordinator)->group(function () {
+    // MOV review
     Route::get('/coordinator/movs',              [MovController::class, 'index']);
     Route::post('/coordinator/movs/{id}/review', [MovController::class, 'review']);
+
+    // online attendance review + history
+    Route::get('/supervisor/pending',   [OnlineSubmissionController::class, 'pending']);
+    Route::get('/supervisor/history',   [OnlineSubmissionController::class, 'history']);
+    Route::post('/supervisor/validate', [OnlineSubmissionController::class, 'validate']);
+
+    // NFC card requests
+    Route::get('/supervisor/nfc-requests', [NfcRequestController::class, 'index']);
+    Route::post('/supervisor/nfc-requests/{id}/review', [NfcRequestController::class, 'review']);
+
+    // overtime (time after 5:00 PM) needs the coordinator's approval to count
+    Route::get('/coordinator/overtime',               [OvertimeController::class, 'index']);
+    Route::post('/coordinator/overtime/{id}/review',  [OvertimeController::class, 'review']);
+
+    // forgotten time-outs sent by interns
+    Route::get('/coordinator/time-corrections',              [TimeCorrectionController::class, 'index']);
+    Route::post('/coordinator/time-corrections/{id}/review', [TimeCorrectionController::class, 'review']);
 });
 
 /* ───────── Edit a profile: admin, coordinator, or the person themselves ───────── */

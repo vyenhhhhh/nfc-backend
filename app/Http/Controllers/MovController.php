@@ -1,8 +1,9 @@
 <?php
-
+//movcontroller.php
 namespace App\Http\Controllers;
 
 use App\Services\Notifier;
+use App\Services\OjtHours;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -77,13 +78,33 @@ class MovController extends Controller
         return response()->json(['message' => 'MOV submitted successfully.', 'id' => $id]);
     }
 
+    // Intern removes their own MOV while it is still pending (the uploaded file is deleted too)
+    // DELETE /api/intern/submit-mov/{id}
+    public function destroy(Request $request, $id)
+    {
+        $auth = $request->attributes->get('auth_user');
+        $mov  = DB::table('movs')->where('id', $id)->first();
+
+        if (!$mov || (int) $mov->user_id !== (int) $auth->id) {
+            return response()->json(['message' => 'Submission not found.'], 404);
+        }
+        if ($mov->status !== 'pending') {
+            return response()->json(['message' => 'Only pending submissions can be removed.'], 409);
+        }
+
+        if ($mov->file_path) Storage::disk('public')->delete($mov->file_path);
+        DB::table('movs')->where('id', $id)->delete();
+
+        return response()->json(['message' => 'Submission removed.']);
+    }
+
     // Coordinator views all submissions
     public function index()
     {
         $movs = DB::table('movs as m')
             ->join('users as u', 'u.id', '=', 'm.user_id')
             ->orderByDesc('m.created_at')
-            ->select('m.*', 'u.name as intern_name', 'u.email as intern_email')
+            ->select('m.*', 'u.name as intern_name', 'u.email as intern_email', 'u.photo as intern_photo')
             ->get();
 
         return response()->json($movs);
@@ -106,19 +127,27 @@ class MovController extends Controller
         $request->validate([
             'status'      => 'required|in:approved,rejected',
             'remarks'     => 'nullable|string',
-            'reviewer_id' => 'required|integer|exists:users,id',
+            'reviewer_id' => 'nullable|integer|exists:users,id',
         ]);
 
         $mov = DB::table('movs')->where('id', $id)->first();
         if (!$mov) return response()->json(['message' => 'Submission not found.'], 404);
 
-        DB::table('movs')->where('id', $id)->update([
+        $auth     = $request->attributes->get('auth_user');
+        $reviewer = $auth->id ?? $request->reviewer_id;
+
+        // only a pending submission can be reviewed
+        $changed = DB::table('movs')->where('id', $id)->where('status', 'pending')->update([
             'status'      => $request->status,
             'remarks'     => $request->remarks,
-            'reviewed_by' => $request->reviewer_id,
+            'reviewed_by' => $reviewer,
             'reviewed_at' => Carbon::now(),
             'updated_at'  => Carbon::now(),
         ]);
+
+        if (!$changed) {
+            return response()->json(['message' => 'This submission was already reviewed.'], 409);
+        }
 
         // Notify the intern about the decision
         Notifier::toUser(
@@ -141,29 +170,12 @@ class MovController extends Controller
         elseif (preg_match('/BSIS|INFORMATION\s+SYS/', $p)) $key = 'BSIS';
         elseif (preg_match('/BSCS|COMPUTER\s+SCI/', $p)) $key = 'BSCS';
 
-        return (float) (config('ojt.program_hours')[$key] ?? config('ojt.default_hours', 486));
+        return (float) (config('ojt.program_hours')[$key] ?? config('ojt.default_hours', 460));
     }
 
-    // Same rule as the dashboard: per day, first time in to first time out
+    // Same rule as the dashboard (see app/Services/OjtHours.php)
     private function renderedHours(int $userId): float
     {
-        $rows = DB::table('attendance_records')
-            ->where('user_id', $userId)
-            ->orderBy('date')->orderBy('id')
-            ->get(['date', 'checked_in_at', 'checked_out_at']);
-
-        $days = [];
-        foreach ($rows as $r) {
-            $d = (string) $r->date;
-            if (!isset($days[$d])) $days[$d] = ['in' => null, 'out' => null];
-            if ($r->checked_in_at && !$days[$d]['in'])   $days[$d]['in']  = $r->checked_in_at;
-            if ($r->checked_out_at && !$days[$d]['out']) $days[$d]['out'] = $r->checked_out_at;
-        }
-
-        $total = 0;
-        foreach ($days as $t) {
-            if ($t['in'] && $t['out']) $total += (strtotime($t['out']) - strtotime($t['in'])) / 3600;
-        }
-        return round($total, 1);
+        return OjtHours::rendered($userId);
     }
 }

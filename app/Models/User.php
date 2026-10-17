@@ -1,4 +1,5 @@
 <?php
+//user.php
 namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
@@ -18,11 +19,11 @@ class User extends Authenticatable
      * @var list<string>
      */
     protected $fillable = [
-    'name', 'first_name', 'middle_name', 'last_name',
-    'email', 'password', 'role',
-    'student_id', 'contact_number', 'address',
-    'uid', 'work_mode', 'tracking_type', 'photo',
-];
+        'name', 'first_name', 'middle_name', 'last_name',
+        'email', 'password', 'role',
+        'student_id', 'contact_number', 'address',
+        'uid', 'work_mode', 'tracking_type', 'dtr_mode', 'photo',
+    ];
 
     /**
      * The attributes that should be hidden for serialization.

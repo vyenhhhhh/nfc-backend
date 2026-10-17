@@ -18,7 +18,33 @@ class OnlineSubmissionController extends Controller
             'date'        => 'required|date',
         ]);
 
-        $now = Carbon::now('Asia/Manila');
+        $now  = Carbon::now('Asia/Manila');
+        $date = Carbon::parse($request->date, 'Asia/Manila');
+
+        if ($date->greaterThan($now->copy()->endOfDay())) {
+            return response()->json(['message' => "You can't submit attendance for a future date."], 422);
+        }
+
+        // the same day can't count twice: a day already tapped at the kiosk is not an online day
+        $tapped = DB::table('attendance_records')
+            ->where('user_id', $request->user_id)
+            ->where('date', $date->toDateString())
+            ->where('uid', '!=', 'ONLINE')
+            ->exists();
+        if ($tapped) {
+            return response()->json(['message' => 'You already have kiosk attendance on this date.'], 409);
+        }
+
+        // same day rules as the kiosk (config/ojt.php)
+        if (config('ojt.block_weekends', false) && $date->isWeekend()) {
+            return response()->json(['message' => 'Online attendance is not accepted on ' . $date->format('l') . 's.'], 422);
+        }
+        if (config('ojt.block_holidays', false)) {
+            $event = DB::table('calendar_events')->whereDate('date', $date->toDateString())->first();
+            if ($event) {
+                return response()->json(['message' => "That date is a holiday / non-working day ({$event->title})."], 422);
+            }
+        }
 
         // Check if already submitted for this date
         $existing = DB::table('online_submissions')
@@ -57,7 +83,7 @@ class OnlineSubmissionController extends Controller
         ]);
     }
 
-    // Intern sees their own online submissions (NEW)
+    // Intern sees their own online submissions
     public function mine(Request $request)
     {
         $request->validate([
@@ -81,25 +107,63 @@ class OnlineSubmissionController extends Controller
         return response()->json($submissions);
     }
 
-    // Supervisor gets pending submissions
+    // Intern removes their own submission while it is still pending
+    // DELETE /api/intern/submit-online/{id}
+    public function destroy(Request $request, $id)
+    {
+        $auth = $request->attributes->get('auth_user');
+        $row  = DB::table('online_submissions')->where('id', $id)->first();
+
+        if (!$row || (int) $row->user_id !== (int) $auth->id) {
+            return response()->json(['message' => 'Submission not found.'], 404);
+        }
+        if ($row->status !== 'pending') {
+            return response()->json(['message' => 'Only pending submissions can be removed.'], 409);
+        }
+
+        DB::table('online_submissions')->where('id', $id)->delete();
+        return response()->json(['message' => 'Submission removed.']);
+    }
+
+    // Coordinator gets pending submissions
     public function pending(Request $request)
     {
         $submissions = DB::table('online_submissions as os')
             ->join('users as u', 'u.id', '=', 'os.user_id')
             ->where('os.status', 'pending')
             ->orderByDesc('os.created_at')
-            ->select('os.*', 'u.name as intern_name', 'u.email as intern_email')
+            ->select('os.*', 'u.name as intern_name', 'u.email as intern_email', 'u.photo as intern_photo')
             ->get();
 
         return response()->json($submissions);
     }
 
-    // Supervisor validates or rejects a submission
+    // Approved + rejected submissions, newest first
+    public function history()
+    {
+        $rows = DB::table('online_submissions as os')
+            ->join('users as u', 'u.id', '=', 'os.user_id')
+            ->whereIn('os.status', ['approved', 'rejected'])
+            ->orderByDesc('os.updated_at')
+            ->select(
+                'os.id', 'os.user_id', 'os.date', 'os.description', 'os.status',
+                'u.name as intern_name', 'u.email as intern_email', 'u.photo as intern_photo',
+                DB::raw('(SELECT vl.remarks FROM validation_logs vl
+                          WHERE vl.submission_id = os.id ORDER BY vl.created_at DESC LIMIT 1) as remarks'),
+                DB::raw('(SELECT vl.created_at FROM validation_logs vl
+                          WHERE vl.submission_id = os.id ORDER BY vl.created_at DESC LIMIT 1) as reviewed_at')
+            )
+            ->get();
+
+        return response()->json($rows);
+    }
+
+    // Coordinator approves or rejects a submission
     public function validate(Request $request)
     {
         $request->validate([
             'submission_id'  => 'required|integer',
-            'supervisor_id'  => 'required|integer',
+            'supervisor_id'  => 'nullable|integer',
             'action'         => 'required|in:approved,rejected',
             'remarks'        => 'nullable|string|max:300',
         ]);
@@ -114,33 +178,38 @@ class OnlineSubmissionController extends Controller
             return response()->json(['message' => 'Submission not found.'], 404);
         }
 
-        // Update submission status
-        DB::table('online_submissions')
+        // Only a pending submission can be reviewed (stops double approvals / duplicate attendance)
+        $changed = DB::table('online_submissions')
             ->where('id', $request->submission_id)
-            ->update([
-                'status'     => $request->action,
-                'updated_at' => $now,
-            ]);
+            ->where('status', 'pending')
+            ->update(['status' => $request->action, 'updated_at' => $now]);
 
-        // Log the validation action
+        if (!$changed) {
+            return response()->json(['message' => 'This submission was already reviewed.'], 409);
+        }
+
+        // Log the validation action (the reviewer is whoever is signed in)
+        $auth = $request->attributes->get('auth_user');
         DB::table('validation_logs')->insert([
             'submission_id' => $request->submission_id,
-            'supervisor_id' => $request->supervisor_id,
+            'supervisor_id' => $auth->id ?? $request->supervisor_id,
             'action'        => $request->action,
             'remarks'       => $request->remarks ?? '',
             'created_at'    => $now,
         ]);
 
-        // If approved, create an attendance record
+        // If approved, create an attendance record worth a full official day (8:00 AM–5:00 PM = 8 hours)
         if ($request->action === 'approved') {
+            $s   = config('ojt.schedule');
+            $day = Carbon::parse($submission->date, 'Asia/Manila')->startOfDay();
             DB::table('attendance_records')->insert([
                 'user_id'        => $submission->user_id,
                 'uid'            => 'ONLINE',
-                'date'           => $submission->date,
-                'action'         => 'CHECK_IN',
+                'date'           => $day->toDateString(),
+                'action'         => 'CHECK_OUT',
                 'token'          => 'ONLINE-VALIDATED-' . $request->submission_id,
-                'checked_in_at'  => $now,
-                'checked_out_at' => null,
+                'checked_in_at'  => $day->copy()->addHours($s['am_in']),
+                'checked_out_at' => $day->copy()->addHours($s['pm_out']),
                 'created_at'     => $now,
                 'updated_at'     => $now,
             ]);

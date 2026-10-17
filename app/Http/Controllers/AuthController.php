@@ -1,5 +1,5 @@
 <?php
-
+//authcontroller.php
 namespace App\Http\Controllers;
 
 use Carbon\Carbon;
@@ -80,20 +80,32 @@ class AuthController extends Controller
             'photo'         => $user->photo ?? null,
             'work_mode'     => $user->work_mode ?? 'onsite',
             'tracking_type' => $user->tracking_type ?? 'hours',
+            'dtr_mode'      => $user->dtr_mode ?? 'two',
             'has_card'      => $hasCard,
             'token'         => $token,
         ]);
     }
 
+    // Own account for everyone; staff may open any account.
+    // (date_of_birth and student_id can reset a password, so interns must not read other people's.)
     public function me(Request $request)
     {
-        $user = DB::table('users')->where('id', $request->query('user_id'))->first();
+        $auth    = $request->attributes->get('auth_user');
+        $authId  = (int) ($auth->id ?? 0);
+        $wanted  = (int) $request->query('user_id', $authId);
+        $isStaff = in_array($auth->role ?? '', ['admin', 'ojt_coordinator', 'supervisor'], true);
+
+        if (!$isStaff && $wanted !== $authId) {
+            return response()->json(['message' => 'Not allowed.'], 403);
+        }
+
+        $user = DB::table('users')->where('id', $wanted)->first();
 
         if (!$user) {
             return response()->json(['message' => 'User not found.'], 404);
         }
 
-        unset($user->password);
+        unset($user->password, $user->remember_token);
         return response()->json($user);
     }
 

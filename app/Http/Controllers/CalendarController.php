@@ -17,6 +17,12 @@ class CalendarController extends Controller
         return Carbon::parse($date)->format('M j, Y');
     }
 
+    private function authId(Request $request): ?int
+    {
+        $auth = $request->attributes->get('auth_user');
+        return $auth && isset($auth->id) ? (int) $auth->id : null;
+    }
+
     // Get all calendar events
     public function index()
     {
@@ -48,12 +54,14 @@ class CalendarController extends Controller
             ], 409);
         }
 
+        $me = $this->authId($request);
+
         $id = DB::table('calendar_events')->insertGetId([
             'date'        => $request->date,
             'type'        => $request->type,
             'title'       => $request->title,
             'description' => $request->description,
-            'created_by'  => $request->created_by,
+            'created_by'  => $me ?? $request->created_by,
             'created_at'  => Carbon::now('Asia/Manila'),
             'updated_at'  => Carbon::now('Asia/Manila'),
         ]);
@@ -63,7 +71,7 @@ class CalendarController extends Controller
             $request->type === 'holiday' ? 'New Holiday' : 'New Non-working Day',
             $request->title . ' · ' . $this->friendly($request->date),
             'calendar',
-            $request->created_by ? (int) $request->created_by : null
+            $me
         );
 
         return response()->json([
@@ -118,7 +126,7 @@ class CalendarController extends Controller
             'Calendar Event Updated',
             $request->title . ' · ' . $this->friendly($request->date),
             'calendar',
-            $event->created_by ? (int) $event->created_by : null
+            $this->authId($request)
         );
 
         return response()->json([
@@ -127,7 +135,7 @@ class CalendarController extends Controller
     }
 
     // Delete a calendar event
-    public function destroy($id)
+    public function destroy(Request $request, $id)
     {
         $event = DB::table('calendar_events')
             ->where('id', $id)
@@ -148,7 +156,7 @@ class CalendarController extends Controller
             'Calendar Event Removed',
             $event->title . ' · ' . $this->friendly($event->date),
             'calendar',
-            $event->created_by ? (int) $event->created_by : null
+            $this->authId($request)
         );
 
         return response()->json([

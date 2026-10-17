@@ -1,5 +1,5 @@
 <?php
-
+//2026_10_06_035224_create_notifications_tables.php
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
@@ -35,6 +35,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('notifications_tables');
+        Schema::dropIfExists('notifications');
     }
 };
