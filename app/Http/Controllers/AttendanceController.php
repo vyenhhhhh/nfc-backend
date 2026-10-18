@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Services\Notifier;
 use App\Services\OjtHours;
+use App\Services\Supervision;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
@@ -88,7 +89,13 @@ class AttendanceController extends Controller
             $window  = config('ojt.tap_window');
             $hourNow = $now->hour + $now->minute / 60;
 
-            if (config('ojt.block_holidays', false)) {
+            // hours only count after the MOA is approved (Internship FAQ #6–7)
+            if (!Supervision::moaApproved($card->user_id)) {
+                $blocked = 'Your MOA is not approved yet, so your hours cannot be counted. '
+                    . 'Upload it under Submit MOV and wait for your OJT coordinator to approve it.';
+            }
+
+            if (!$blocked && config('ojt.block_holidays', false)) {
                 $event = DB::table('calendar_events')->whereDate('date', $today)->first();
                 if ($event) {
                     $kind    = $event->type === 'holiday' ? 'a holiday' : 'a non-working day';
@@ -182,8 +189,9 @@ class AttendanceController extends Controller
             DB::table('attendance_records')->where('id', $openRecord->id)->update($update);
 
             if (isset($update['ot_status'])) {
-                Notifier::toRoles(
-                    ['ojt_coordinator'],
+                // the intern's supervisor reviews it first (the coordinators, if no supervisor is assigned)
+                Supervision::notifyReviewer(
+                    $card->user_id,
                     'Overtime to Review',
                     ($intern->name ?? 'An intern') . " has {$otMinutes} min of overtime on "
                         . $now->format('M j, Y') . '.',
@@ -206,13 +214,15 @@ class AttendanceController extends Controller
 
     // ── Today's Records ───────────────────────────────────
         // ── Today's Records ───────────────────────────────────
-    public function today()
+    public function today(Request $request)
     {
         $today = Carbon::today('Asia/Manila')->toDateString();
+        $scope = Supervision::scope($request->attributes->get('auth_user'));   // a supervisor: own interns only
         return response()->json(
             DB::table('attendance_records as a')
                 ->join('users as u', 'u.id', '=', 'a.user_id')
                 ->where('a.date', $today)
+                ->when($scope !== null, fn ($q) => $q->whereIn('a.user_id', $scope))
                 ->orderByDesc('a.created_at')
                 ->select('u.name', 'u.photo', 'a.*')
                 ->get()
@@ -243,24 +253,41 @@ class AttendanceController extends Controller
             $query->where('a.date', $request->query('date'));
         }
 
+        // a supervisor only sees their own interns
+        $scope = Supervision::scope($request->attributes->get('auth_user'));
+        if ($scope !== null) {
+            $query->whereIn('a.user_id', $scope);
+        }
+
         return response()->json(
             $query->select('u.name', 'u.email', 'u.photo', 'a.*')->get()
         );
     }
 
     // ── All Users (with the NFC card UID, if any) ─────────
-    public function allUsers()
+    public function allUsers(Request $request)
     {
+        $auth    = $request->attributes->get('auth_user');
+        $isAdmin = $auth && $auth->role === 'admin';
+
+        // a supervisor only sees their own interns (and themselves)
+        $scope = Supervision::scope($auth);
+
         $rows = DB::table('users as u')
             ->leftJoin('nfc_cards as n', 'n.user_id', '=', 'u.id')
+            ->leftJoin('users as s', 's.id', '=', 'u.supervisor_id')
+            ->when($scope !== null, fn ($q) => $q->where(function ($w) use ($scope, $auth) {
+                $w->whereIn('u.id', $scope)->orWhere('u.id', $auth->id);
+            }))
             ->orderBy('u.name')
-            ->select('u.*', 'n.uid as nfc_uid')
+            ->select('u.*', 'n.uid as nfc_uid', 's.name as supervisor_name')
             ->get();
 
         // never send password hashes to the browser
         return response()->json(
-            $rows->map(function ($u) {
+            $rows->map(function ($u) use ($isAdmin) {
                 unset($u->password, $u->remember_token);
+                if (!$isAdmin) unset($u->date_of_birth);   // only the admin sees birthdays
                 return $u;
             })->values()
         );
@@ -287,8 +314,18 @@ class AttendanceController extends Controller
             'work_mode'      => 'nullable|in:onsite,offsite',
             'tracking_type'  => 'nullable|in:hours,output',
             'dtr_mode'       => 'nullable|in:two,four',
+            'supervisor_id'  => 'nullable|integer|exists:users,id',
             'photo'          => 'nullable|image|max:2048',
+            'emergency_contact_name'     => 'nullable|string|max:150',
+            'emergency_contact_relation' => 'nullable|string|max:60',
+            'emergency_contact_number'   => 'nullable|string|max:20',
+            'emergency_contact_address'  => 'nullable|string|max:255',
         ]);
+
+        if (!empty($data['supervisor_id'])
+            && DB::table('users')->where('id', $data['supervisor_id'])->value('role') !== 'supervisor') {
+            return response()->json(['message' => 'The chosen supervisor is not a supervisor account.'], 422);
+        }
 
         // Build the full name so the rest of the dashboard keeps working
         $fullName = trim(implode(' ', array_filter([
@@ -325,6 +362,11 @@ class AttendanceController extends Controller
             'work_mode'      => $isIntern ? ($data['work_mode'] ?? 'onsite') : 'onsite',
             'tracking_type'  => $isIntern ? ($data['tracking_type'] ?? 'hours') : 'hours',
             'dtr_mode'       => $isIntern ? ($data['dtr_mode'] ?? 'two') : 'two',
+            'supervisor_id'  => $isIntern ? ($data['supervisor_id'] ?? null) : null,
+            'emergency_contact_name'     => $data['emergency_contact_name'] ?? null,
+            'emergency_contact_relation' => $data['emergency_contact_relation'] ?? null,
+            'emergency_contact_number'   => $data['emergency_contact_number'] ?? null,
+            'emergency_contact_address'  => $data['emergency_contact_address'] ?? null,
             'photo'          => $photoPath,
             'created_at'     => $now,
             'updated_at'     => $now,
@@ -374,25 +416,23 @@ class AttendanceController extends Controller
             'work_mode'      => 'nullable|in:onsite,offsite',
             'tracking_type'  => 'nullable|in:hours,output',
             'dtr_mode'       => 'nullable|in:two,four',
+            'supervisor_id'  => 'nullable|integer|exists:users,id',
             'uid'            => 'nullable|string|max:64',
             'date_of_birth'  => 'nullable|date|before:today',
             'password'       => 'nullable|string|min:6|max:100',   // admin sets a new password
+            'emergency_contact_name'     => 'nullable|string|max:150',
+            'emergency_contact_relation' => 'nullable|string|max:60',
+            'emergency_contact_number'   => 'nullable|string|max:20',
+            'emergency_contact_address'  => 'nullable|string|max:255',
         ]);
 
         // Who is asking (set by the sign-in check on the route)
         $auth    = $request->attributes->get('auth_user');
         $isAdmin = $auth && $auth->role === 'admin';
 
-        if ($auth && !$isAdmin) {
-            // interns can't edit accounts; a coordinator may edit interns (or themselves), not other staff
-            if ($auth->role === 'intern'
-                || ($user->role !== 'intern' && (int) $auth->id !== (int) $id)) {
-                return response()->json(['message' => 'You are not allowed to edit this account.'], 403);
-            }
-            // only the admin may change these
-            foreach (['email', 'student_id', 'date_of_birth', 'password'] as $k) {
-                unset($data[$k]);
-            }
+        // only the admin may edit account / profile details (coordinators, supervisors and interns can only view)
+        if (!$isAdmin) {
+            return response()->json(['message' => 'Only the admin can edit profile information.'], 403);
         }
 
         $isIntern = $user->role === 'intern';
@@ -427,6 +467,13 @@ class AttendanceController extends Controller
             'updated_at'     => Carbon::now('Asia/Manila'),
         ];
 
+        // emergency contact: saved when the form sent it (a cleared field is saved as empty)
+        foreach (['emergency_contact_name', 'emergency_contact_relation', 'emergency_contact_number', 'emergency_contact_address'] as $k) {
+            if ($request->has($k)) {
+                $update[$k] = ($data[$k] ?? null) !== null && trim((string) $data[$k]) !== '' ? trim((string) $data[$k]) : null;
+            }
+        }
+
         // only touch these when they were actually sent (the profile panel doesn't send them)
         if (!empty($data['date_of_birth'])) {
             $update['date_of_birth'] = Carbon::parse($data['date_of_birth'])->toDateString();
@@ -447,6 +494,15 @@ class AttendanceController extends Controller
             $update['work_mode']     = $data['work_mode'] ?? $user->work_mode;
             $update['tracking_type'] = $data['tracking_type'] ?? $user->tracking_type;
             $update['dtr_mode']      = $data['dtr_mode'] ?? ($user->dtr_mode ?? 'two');
+
+            // the intern's supervisor: only when the form sent it (admin or coordinator)
+            if ($request->has('supervisor_id') && (!$auth || in_array($auth->role, ['admin', 'ojt_coordinator'], true))) {
+                $sup = $data['supervisor_id'] ?? null;
+                if ($sup && DB::table('users')->where('id', $sup)->value('role') !== 'supervisor') {
+                    return response()->json(['message' => 'The chosen supervisor is not a supervisor account.'], 422);
+                }
+                $update['supervisor_id'] = $sup ?: null;
+            }
         }
 
         try {
@@ -497,8 +553,8 @@ class AttendanceController extends Controller
         try {
             DB::transaction(function () use ($id) {
                 // Delete everything that belongs to this user first (skips tables that don't exist yet)
-                foreach (['nfc_cards', 'tokens', 'attendance_records', 'online_submissions',
-                          'nfc_requests', 'notifications', 'account_recovery', 'api_tokens'] as $t) {
+                foreach (['nfc_cards', 'tokens', 'attendance_records', 'online_submissions', 'nfc_requests',
+                          'notifications', 'account_recovery', 'api_tokens', 'time_corrections', 'dtr_certifications'] as $t) {
                     if (Schema::hasTable($t) && Schema::hasColumn($t, 'user_id')) {
                         DB::table($t)->where('user_id', $id)->delete();
                     }
@@ -516,6 +572,11 @@ class AttendanceController extends Controller
                     if (Schema::hasColumn('movs', 'reviewed_by')) {
                         DB::table('movs')->where('reviewed_by', $id)->update(['reviewed_by' => null]);
                     }
+                }
+
+                // a deleted supervisor's interns are left without a supervisor (the admin assigns a new one)
+                if (Schema::hasColumn('users', 'supervisor_id')) {
+                    DB::table('users')->where('supervisor_id', $id)->update(['supervisor_id' => null]);
                 }
 
                 // Announcements they posted

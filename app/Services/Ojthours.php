@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\DB;
  *  - only time inside the official hours counts: 8:00–12:00 and 1:00–5:00 (config/ojt.php)
  *    → arriving at 7:30 counts from 8:00, lunch never counts, no grace period for late taps
  *  - time after 5:00 PM is overtime: it counts only after the coordinator approves it
- *  - a day never credits more than the daily cap (8 hours), overtime included
+ *  - official hours give at most the daily cap (8 hours) a day; approved overtime is added on top
  */
 class OjtHours
 {
@@ -47,15 +47,18 @@ class OjtHours
     public static function day(iterable $rows): float
     {
         $cap = (float) config('ojt.daily_cap_hours', 8) * 3600;
-        $seconds = 0;
+        $regular = 0;
+        $overtime = 0;
         $seen = [];
         foreach ($rows as $r) {
             if (!$r->checked_in_at || isset($seen[$r->checked_in_at])) continue;
             $seen[$r->checked_in_at] = true;
-            [$regular] = self::split($r->checked_in_at, $r->checked_out_at);
-            $seconds += $regular + ((int) ($r->ot_approved_minutes ?? 0)) * 60;
+            [$reg] = self::split($r->checked_in_at, $r->checked_out_at);
+            $regular  += $reg;
+            $overtime += ((int) ($r->ot_approved_minutes ?? 0)) * 60;
         }
-        return min($cap, $seconds) / 3600;
+        // the cap is for the official hours only; overtime the coordinator approved is added on top
+        return (min($cap, $regular) + $overtime) / 3600;
     }
 
     /** Total credited hours of an intern */

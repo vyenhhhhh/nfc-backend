@@ -119,38 +119,29 @@ class RecoveryController extends Controller
 
     /* ───────── Login page (not signed in) ───────── */
 
-    // Step 1 of "Forgot password": ID number + (recovery code OR date of birth).
+    // Step 1 of "Forgot password": ID number + recovery code.
+    // (Date of birth is NOT accepted: classmates and staff often know it, so it is not a secret.)
     // Only if they match the same account do we hand back a 10-minute pass to set a new password.
     public function verify(Request $request)
     {
         $request->validate([
-            'identifier'    => 'required|string|max:150',
-            'code'          => 'nullable|string|max:30',
-            'date_of_birth' => 'nullable|date',
+            'identifier' => 'required|string|max:150',
+            'code'       => 'required|string|max:30',
         ]);
 
         $fail = response()->json(['message' => "We couldn't verify those details. Check them and try again."], 422);
 
-        if (!$request->filled('code') && !$request->filled('date_of_birth')) {
-            return response()->json(['message' => 'Enter your recovery code or your date of birth.'], 422);
-        }
-
         $user = $this->findUser($request->identifier);
         if (!$user) return $fail;
 
-        $ok = false;
-        if ($request->filled('code')) {
-            $row = DB::table('account_recovery')->where('user_id', $user->id)->first();
-            if ($row) {
-                try {
-                    $ok = hash_equals($this->norm(Crypt::decryptString($row->code)), $this->norm($request->code));
-                } catch (\Throwable $e) {
-                    $ok = false;
-                }
+        $ok  = false;
+        $row = DB::table('account_recovery')->where('user_id', $user->id)->first();
+        if ($row) {
+            try {
+                $ok = hash_equals($this->norm(Crypt::decryptString($row->code)), $this->norm($request->code));
+            } catch (\Throwable $e) {
+                $ok = false;
             }
-        }
-        if (!$ok && $request->filled('date_of_birth') && $user->date_of_birth) {
-            $ok = Carbon::parse($request->date_of_birth)->toDateString() === substr((string) $user->date_of_birth, 0, 10);
         }
         if (!$ok) return $fail;
 
@@ -204,12 +195,10 @@ class RecoveryController extends Controller
 
         $user = $this->findUser($request->identifier);
 
-        // The code is only created from My Profile. If the user never made one, there is nothing to send.
-        $row = $user ? DB::table('account_recovery')->where('user_id', $user->id)->first() : null;
-
-        if ($user && $row && $user->email) {
+        if ($user && $user->email) {
             try {
-                $code = Crypt::decryptString($row->code);
+                // makes a code first if this user never opened My Profile
+                $code = $this->codeFor($user->id);
                 Mail::raw(
                     "Hello {$user->name},\n\nYour MYTRACK recovery code is:\n\n    {$code}\n\n"
                     . "Use it on the login page (Forgot password?) to set a new password.\n"

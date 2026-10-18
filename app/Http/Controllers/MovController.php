@@ -18,7 +18,7 @@ class MovController extends Controller
             'user_id' => 'required|integer|exists:users,id',
             'title'   => 'required|string|max:150',
             'requirement' => 'nullable|string|max:60',
-            'phase'       => 'nullable|in:pre,post',
+            'phase'       => 'nullable|in:pre,during,post',
             'file'    => 'required|file|mimes:pdf,jpg,jpeg,png,doc,docx|max:10240', // 10MB
         ]);
 
@@ -39,8 +39,9 @@ class MovController extends Controller
             }
         }
 
-        // one live submission per requirement (a rejected one can be re-uploaded); "others" can repeat
-        if ($requirement !== 'others') {
+        // one live submission per requirement (a rejected one can be re-uploaded);
+        // "others" and weekly/monthly reports can be submitted many times
+        if (!in_array($requirement, ['others', 'weekly_report'], true)) {
             $exists = DB::table('movs')
                 ->where('user_id', $request->user_id)
                 ->where('requirement', $requirement)

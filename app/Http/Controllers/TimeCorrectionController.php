@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Services\Notifier;
+use App\Services\Supervision;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -10,7 +11,9 @@ use Illuminate\Support\Facades\DB;
 /**
  * Forgot to tap out?
  *  - the intern sends the time they left and a reason (for a past day only; today they can still tap)
- *  - the OJT coordinator approves (the time out is saved and the day gets its hours) or rejects it
+ *  - the intern's supervisor confirms it ("endorsed") or rejects it            (SupervisorController)
+ *  - then the OJT coordinator approves (the time out is saved and the day gets its hours) or rejects it
+ *  - an intern with no supervisor assigned yet goes straight to the coordinator
  */
 class TimeCorrectionController extends Controller
 {
@@ -63,7 +66,7 @@ class TimeCorrectionController extends Controller
 
         $pending = DB::table('time_corrections')
             ->where('attendance_id', $rec->id)
-            ->where('status', 'pending')
+            ->whereIn('status', ['pending', 'endorsed'])
             ->exists();
         if ($pending) {
             return response()->json(['message' => 'You already sent a request for this day.'], 409);
@@ -81,8 +84,8 @@ class TimeCorrectionController extends Controller
             'updated_at'    => $now,
         ]);
 
-        Notifier::toRoles(
-            ['ojt_coordinator'],
+        Supervision::notifyReviewer(
+            $auth->id,
             'Time Correction Request',
             ($auth->name ?? 'An intern') . ' forgot to tap out on ' . Carbon::parse($day)->format('M j, Y')
                 . ' and asks for ' . $out->format('g:i A') . '.',
@@ -99,12 +102,14 @@ class TimeCorrectionController extends Controller
             ->join('users as u', 'u.id', '=', 'c.user_id')
             ->leftJoin('attendance_records as a', 'a.id', '=', 'c.attendance_id')
             ->leftJoin('users as r', 'r.id', '=', 'c.reviewed_by')
+            ->leftJoin('users as e', 'e.id', '=', 'c.endorsed_by')
+            ->leftJoin('users as s', 's.id', '=', 'u.supervisor_id')
             ->select(
-                'c.*', 'a.checked_in_at',
+                'c.*', 'a.checked_in_at', 'u.supervisor_id',
                 'u.name as intern_name', 'u.email as intern_email', 'u.photo as intern_photo',
-                'r.name as reviewer_name'
+                'r.name as reviewer_name', 'e.name as endorser_name', 's.name as supervisor_name'
             )
-            ->orderByRaw("CASE c.status WHEN 'pending' THEN 0 ELSE 1 END")
+            ->orderByRaw("CASE c.status WHEN 'endorsed' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END")
             ->orderByDesc('c.date')
             ->orderByDesc('c.id')
             ->get();
@@ -124,14 +129,21 @@ class TimeCorrectionController extends Controller
         if (!$req) {
             return response()->json(['message' => 'Request not found.'], 404);
         }
-        if ($req->status !== 'pending') {
-            return response()->json(['message' => 'This request was already reviewed.'], 409);
+        // step 2: after the supervisor confirmed it ("endorsed"); a "pending" one only when there is no supervisor
+        $hasSupervisor = Supervision::supervisorOf($req->user_id) !== null;
+        $from = $req->status === 'endorsed' ? 'endorsed' : (($req->status === 'pending' && !$hasSupervisor) ? 'pending' : null);
+        if (!$from) {
+            return response()->json([
+                'message' => $req->status === 'pending'
+                    ? "Waiting for the intern's supervisor to review it first."
+                    : 'This request was already reviewed.',
+            ], 409);
         }
 
         $auth = $request->attributes->get('auth_user');
         $now  = Carbon::now('Asia/Manila');
 
-        $result = DB::transaction(function () use ($req, $data, $auth, $now) {
+        $result = DB::transaction(function () use ($req, $data, $auth, $now, $from) {
             if ($data['status'] === 'approved') {
                 // save the time out only if the record still has none
                 $fixed = DB::table('attendance_records')
@@ -145,7 +157,7 @@ class TimeCorrectionController extends Controller
                 if (!$fixed) return 'conflict';
             }
 
-            DB::table('time_corrections')->where('id', $req->id)->update([
+            DB::table('time_corrections')->where('id', $req->id)->where('status', $from)->update([
                 'status'      => $data['status'],
                 'remarks'     => $data['remarks'] ?? null,
                 'reviewed_by' => $auth->id ?? null,

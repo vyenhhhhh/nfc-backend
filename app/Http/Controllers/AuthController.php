@@ -106,6 +106,13 @@ class AuthController extends Controller
         }
 
         unset($user->password, $user->remember_token);
+
+        // for the My Profile page: the linked NFC card and the supervisor's name
+        $user->nfc_uid = DB::table('nfc_cards')->where('user_id', $user->id)->value('uid');
+        $user->supervisor_name = !empty($user->supervisor_id)
+            ? DB::table('users')->where('id', $user->supervisor_id)->value('name')
+            : null;
+
         return response()->json($user);
     }
 

@@ -13,6 +13,11 @@ use App\Http\Controllers\RecoveryController;
 use App\Http\Controllers\OvertimeController;
 use App\Http\Controllers\TimeCorrectionController;
 use App\Http\Middleware\ApiTokenAuth;
+use App\Http\Controllers\LiveController;
+use App\Http\Controllers\SupervisorController;
+use App\Http\Controllers\WorkModeController;
+use App\Http\Controllers\RequirementController;
+use App\Http\Controllers\AnnouncementHistoryController;
 
 // Who may call what (see app/Http/Middleware/ApiTokenAuth.php)
 $anyUser     = ApiTokenAuth::class;                                          // any signed-in user
@@ -56,6 +61,17 @@ Route::middleware($anyUser)->group(function () {
     Route::get('/intern/time-corrections',  [TimeCorrectionController::class, 'mine']);
     Route::post('/intern/time-corrections', [TimeCorrectionController::class, 'store']);
 
+    // DTR certification status (interns see only their own)
+    Route::get('/dtr-certifications', [SupervisorController::class, 'certifications']);
+
+    // work arrangement (WFH) requests
+    Route::get('/intern/work-mode-requests',         [WorkModeController::class, 'mine']);
+    Route::post('/intern/work-mode-requests',        [WorkModeController::class, 'store']);
+    Route::delete('/intern/work-mode-requests/{id}', [WorkModeController::class, 'destroy']);
+
+    // requirement due dates (everyone can read them)
+    Route::get('/requirement-deadlines', [RequirementController::class, 'index']);
+
     // Read-only for everyone
     Route::get('/calendar',      [CalendarController::class, 'index']);
     Route::get('/announcements', [AnnouncementController::class, 'index']);
@@ -77,10 +93,25 @@ Route::middleware($staff)->group(function () {
 
     // announcements
     Route::post('/announcements',        [AnnouncementController::class, 'store']);
-    Route::delete('/announcements/{id}', [AnnouncementController::class, 'destroy']);
+    // removing keeps a copy in the history; from there it can be deleted for good
+    Route::get('/announcements/history',          [AnnouncementHistoryController::class, 'index']);
+    Route::delete('/announcements/history/{id}',  [AnnouncementHistoryController::class, 'destroy']);
+    Route::delete('/announcements/{id}',          [AnnouncementHistoryController::class, 'remove']);
 });
 
-/* ───────── Admin + OJT coordinator: reviews (supervisor stays read-only) ───────── */
+/* ───────── HTE supervisor: first review of their own interns + DTR certification ───────── */
+Route::middleware(ApiTokenAuth::class . ':supervisor')->group(function () {
+    Route::get('/supervisor/online',                        [SupervisorController::class, 'online']);
+    Route::post('/supervisor/online/{id}/review',           [SupervisorController::class, 'reviewOnline']);
+    Route::get('/supervisor/overtime',                      [SupervisorController::class, 'overtime']);
+    Route::post('/supervisor/overtime/{id}/review',         [SupervisorController::class, 'reviewOvertime']);
+    Route::get('/supervisor/time-corrections',              [SupervisorController::class, 'corrections']);
+    Route::post('/supervisor/time-corrections/{id}/review', [SupervisorController::class, 'reviewCorrection']);
+    Route::post('/supervisor/dtr-certifications',           [SupervisorController::class, 'certify']);
+    Route::delete('/supervisor/dtr-certifications/{id}',    [SupervisorController::class, 'uncertify']);
+});
+
+/* ───────── Admin + OJT coordinator: reviews and final decisions ───────── */
 Route::middleware($coordinator)->group(function () {
     // MOV review
     Route::get('/coordinator/movs',              [MovController::class, 'index']);
@@ -102,13 +133,22 @@ Route::middleware($coordinator)->group(function () {
     // forgotten time-outs sent by interns
     Route::get('/coordinator/time-corrections',              [TimeCorrectionController::class, 'index']);
     Route::post('/coordinator/time-corrections/{id}/review', [TimeCorrectionController::class, 'review']);
+
+    // WFH requests
+    Route::get('/coordinator/work-mode-requests',              [WorkModeController::class, 'index']);
+    Route::post('/coordinator/work-mode-requests/{id}/review', [WorkModeController::class, 'review']);
+
+    // requirement due dates + reminders
+    Route::put('/coordinator/requirement-deadlines',          [RequirementController::class, 'save']);
+    Route::get('/coordinator/requirement-deadlines/missing',  [RequirementController::class, 'missingCounts']);
+    Route::post('/coordinator/requirement-deadlines/remind',  [RequirementController::class, 'remind']);
 });
 
-/* ───────── Edit a profile: admin, coordinator, or the person themselves ───────── */
+/* ───────── Edit a profile (details or photo): admin only ───────── */
 Route::patch('/admin/users/{id}',      [AttendanceController::class, 'updateUser'])
-    ->middleware(ApiTokenAuth::class . ':admin,ojt_coordinator,self');
+    ->middleware($adminOnly);
 Route::post('/admin/users/{id}/photo', [AttendanceController::class, 'updatePhoto'])
-    ->middleware(ApiTokenAuth::class . ':admin,self');
+    ->middleware($adminOnly);
 
 /* ───────── Admin only ───────── */
 Route::middleware($adminOnly)->group(function () {

@@ -21,11 +21,11 @@ return [
         'pm_out' => 17,
     ],
 
-    // Most hours credited per day, including overtime the coordinator approved
+    // Most hours the official hours can give in a day. Overtime the coordinator approves is added on top.
     'daily_cap_hours' => 8,
 
-    // Time after 5:00 PM becomes an overtime request only if it is at least this many minutes
-    'overtime_min_minutes' => 15,
+    // Time after 5:00 PM becomes an overtime request for the coordinator
+    'overtime_min_minutes' => 1,   // no minimum: any minute after 5:00 PM goes to the coordinator
 
     // A second tap within this many minutes is treated as an accidental duplicate
     'tap_cooldown_minutes' => 5,
@@ -39,4 +39,11 @@ return [
     'tap_window'     => ['from' => 6, 'to' => 21],   // check-ins only from 6:00 AM to 9:00 PM
     'block_weekends' => true,                        // no check-ins on Saturdays and Sundays
     'block_holidays' => true,                        // no check-ins on holidays / non-working days in the Calendar
+
+    // Hours only count after the intern's MOA is approved (Internship FAQ #6–7):
+    // the kiosk and online attendance refuse an intern whose "MOA" requirement is not approved yet.
+    'require_moa' => true,
+
+    // Online attendance is only for interns with an approved WFH arrangement (work mode "offsite").
+    'online_requires_wfh' => true,
 ];

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Services\Notifier;
+use App\Services\Supervision;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
@@ -23,6 +24,21 @@ class OnlineSubmissionController extends Controller
 
         if ($date->greaterThan($now->copy()->endOfDay())) {
             return response()->json(['message' => "You can't submit attendance for a future date."], 422);
+        }
+
+        // online days are for interns with an approved WFH arrangement (letter from the HTE)
+        if (config('ojt.online_requires_wfh', true)
+            && DB::table('users')->where('id', $request->user_id)->value('work_mode') !== 'offsite') {
+            return response()->json([
+                'message' => 'Online attendance is for approved work-from-home only. Request WFH first (with the letter from your HTE).',
+            ], 403);
+        }
+
+        // hours only count after the MOA is approved (Internship FAQ #6–7)
+        if (!Supervision::moaApproved((int) $request->user_id)) {
+            return response()->json([
+                'message' => 'Your MOA is not approved yet. Online attendance opens once your OJT coordinator approves it.',
+            ], 403);
         }
 
         // the same day can't count twice: a day already tapped at the kiosk is not an online day
@@ -67,10 +83,10 @@ class OnlineSubmissionController extends Controller
             'updated_at'  => $now,
         ]);
 
-        // Notify the OJT coordinators
+        // the intern's supervisor confirms it first (the coordinators, if no supervisor is assigned)
         $intern = DB::table('users')->where('id', $request->user_id)->first();
-        Notifier::toRoles(
-            ['ojt_coordinator'],
+        Supervision::notifyReviewer(
+            (int) $request->user_id,
             'New Online Attendance',
             ($intern->name ?? 'An intern') . ' submitted online attendance for '
                 . Carbon::parse($request->date)->format('M j, Y') . '.',
@@ -98,6 +114,7 @@ class OnlineSubmissionController extends Controller
                 'os.date',
                 'os.description',
                 'os.status',
+                'os.endorse_remarks',
                 DB::raw('(SELECT vl.remarks FROM validation_logs vl
                           WHERE vl.submission_id = os.id
                           ORDER BY vl.created_at DESC LIMIT 1) as remarks')
@@ -118,21 +135,26 @@ class OnlineSubmissionController extends Controller
             return response()->json(['message' => 'Submission not found.'], 404);
         }
         if ($row->status !== 'pending') {
-            return response()->json(['message' => 'Only pending submissions can be removed.'], 409);
+            return response()->json(['message' => 'Only submissions nobody has reviewed yet can be removed.'], 409);
         }
 
         DB::table('online_submissions')->where('id', $id)->delete();
         return response()->json(['message' => 'Submission removed.']);
     }
 
-    // Coordinator gets pending submissions
+    // Coordinator: submissions not decided yet — "endorsed" (confirmed by the supervisor) first,
+    // then "pending" ones (still with the supervisor, or no supervisor assigned)
     public function pending(Request $request)
     {
         $submissions = DB::table('online_submissions as os')
             ->join('users as u', 'u.id', '=', 'os.user_id')
-            ->where('os.status', 'pending')
+            ->leftJoin('users as e', 'e.id', '=', 'os.endorsed_by')
+            ->leftJoin('users as s', 's.id', '=', 'u.supervisor_id')
+            ->whereIn('os.status', ['pending', 'endorsed'])
+            ->orderByRaw("CASE os.status WHEN 'endorsed' THEN 0 ELSE 1 END")
             ->orderByDesc('os.created_at')
-            ->select('os.*', 'u.name as intern_name', 'u.email as intern_email', 'u.photo as intern_photo')
+            ->select('os.*', 'u.name as intern_name', 'u.email as intern_email', 'u.photo as intern_photo',
+                'u.supervisor_id', 'e.name as endorser_name', 's.name as supervisor_name')
             ->get();
 
         return response()->json($submissions);
@@ -178,10 +200,22 @@ class OnlineSubmissionController extends Controller
             return response()->json(['message' => 'Submission not found.'], 404);
         }
 
-        // Only a pending submission can be reviewed (stops double approvals / duplicate attendance)
+        // step 2: after the supervisor confirmed it ("endorsed"); a "pending" one only when there is no supervisor
+        $hasSupervisor = Supervision::supervisorOf($submission->user_id) !== null;
+        $from = $submission->status === 'endorsed' ? 'endorsed'
+            : (($submission->status === 'pending' && !$hasSupervisor) ? 'pending' : null);
+        if (!$from) {
+            return response()->json([
+                'message' => $submission->status === 'pending'
+                    ? "Waiting for the intern's supervisor to confirm it first."
+                    : 'This submission was already reviewed.',
+            ], 409);
+        }
+
+        // only if nobody decided it in the meantime (stops double approvals / duplicate attendance)
         $changed = DB::table('online_submissions')
             ->where('id', $request->submission_id)
-            ->where('status', 'pending')
+            ->where('status', $from)
             ->update(['status' => $request->action, 'updated_at' => $now]);
 
         if (!$changed) {
