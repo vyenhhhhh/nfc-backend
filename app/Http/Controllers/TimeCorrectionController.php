@@ -2,18 +2,19 @@
 //TimeCorrectionController.php
 namespace App\Http\Controllers;
 
-use App\Services\Notifier;
 use App\Services\Supervision;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Forgot to tap out?
- *  - the intern sends the time they left and a reason (for a past day only; today they can still tap)
- *  - the intern's supervisor confirms it ("endorsed") or rejects it            (SupervisorController)
- *  - then the OJT coordinator approves (the time out is saved and the day gets its hours) or rejects it
- *  - an intern with no supervisor assigned yet goes straight to the coordinator
+ * Forgot to tap out, or forgot to tap in?
+ *  - forgot to tap out: the intern sends the time they left (past days only; today they can still tap)
+ *  - forgot to tap in: the intern sends when they arrived; if the day has only one tap
+ *    (e.g. they tapped only when leaving), that tap becomes the time out
+ *  - the intern's HTE supervisor approves it (the time out is saved right away and the day gets its
+ *    hours) or rejects it — this is final, the OJT coordinator is not involved   (SupervisorController)
+ *  - an intern needs an assigned supervisor before they can send one
  */
 class TimeCorrectionController extends Controller
 {
@@ -27,14 +28,22 @@ class TimeCorrectionController extends Controller
         );
     }
 
-    // POST /api/intern/time-corrections   { attendance_id, time_out: "17:00", reason }
+    // POST /api/intern/time-corrections
+    //   forgot to tap out: { attendance_id, kind: "out", time_out: "17:00", reason }
+    //   forgot to tap in:  { attendance_id, kind: "in",  time_in:  "08:00", reason }
+    //     (if the day has only one tap, that tap becomes the time out)
     public function store(Request $request)
     {
+        if ($request->input('kind') === 'day') return $this->storeDay($request);
+
         $data = $request->validate([
             'attendance_id' => 'required|integer',
-            'time_out'      => 'required|date_format:H:i',
+            'kind'          => 'nullable|in:out,in',
+            'time_out'      => 'required_unless:kind,in|nullable|date_format:H:i',
+            'time_in'       => 'required_if:kind,in|nullable|date_format:H:i',
             'reason'        => 'required|string|max:500',
         ]);
+        $kind = $data['kind'] ?? 'out';
 
         $auth = $request->attributes->get('auth_user');
         $rec  = DB::table('attendance_records')->where('id', $data['attendance_id'])->first();
@@ -42,25 +51,49 @@ class TimeCorrectionController extends Controller
         if (!$rec || (int) $rec->user_id !== (int) $auth->id || $rec->uid === 'ONLINE') {
             return response()->json(['message' => 'Attendance record not found.'], 404);
         }
-        if ($rec->checked_out_at) {
-            return response()->json(['message' => 'This day already has a time out.'], 409);
+
+        $day   = substr((string) $rec->date, 0, 10);
+        $today = Carbon::today('Asia/Manila')->toDateString();
+        $tap   = Carbon::parse($rec->checked_in_at, 'Asia/Manila');   // the tap the kiosk saved as the time in
+        $requestedIn = null;
+
+        if ($kind === 'out') {
+            if ($rec->checked_out_at) {
+                return response()->json(['message' => 'This day already has a time out.'], 409);
+            }
+            if ($day >= $today) {
+                return response()->json(['message' => 'You can still tap out at the kiosk today.'], 422);
+            }
+
+            $out    = Carbon::parse("{$day} {$data['time_out']}", 'Asia/Manila');
+            $latest = $tap->copy()->startOfDay()->addHours((int) config('ojt.schedule.pm_out', 17));
+
+            if ($out->lessThanOrEqualTo($tap)) {
+                return response()->json(['message' => 'Your time out must be after your time in (' . $tap->format('g:i A') . ').'], 422);
+            }
+            if ($out->greaterThan($latest)) {
+                return response()->json([
+                    'message' => 'A forgotten time out can be at most ' . $latest->format('g:i A') . '. Overtime can\'t be added this way.',
+                ], 422);
+            }
+        } else {
+            // forgot to tap in: the intern says when they really arrived (earlier than the saved tap)
+            $requestedIn = Carbon::parse("{$day} {$data['time_in']}", 'Asia/Manila');
+            $earliest    = $tap->copy()->startOfDay()->addHours((int) (config('ojt.tap_window.from', 6)));
+
+            if ($requestedIn->greaterThanOrEqualTo($tap)) {
+                return response()->json(['message' => 'Your time in must be earlier than your tap at ' . $tap->format('g:i A') . '.'], 422);
+            }
+            if ($requestedIn->lessThan($earliest)) {
+                return response()->json(['message' => 'Your time in can\'t be earlier than ' . $earliest->format('g:i A') . '.'], 422);
+            }
+            // only one tap that day -> that tap was really the time out; otherwise the time out stays as it is
+            $out = $rec->checked_out_at ? Carbon::parse($rec->checked_out_at, 'Asia/Manila') : $tap;
         }
 
-        $day = substr((string) $rec->date, 0, 10);
-        if ($day >= Carbon::today('Asia/Manila')->toDateString()) {
-            return response()->json(['message' => 'You can still tap out at the kiosk today.'], 422);
-        }
-
-        $in     = Carbon::parse($rec->checked_in_at, 'Asia/Manila');
-        $out    = Carbon::parse("{$day} {$data['time_out']}", 'Asia/Manila');
-        $latest = $in->copy()->startOfDay()->addHours((int) config('ojt.schedule.pm_out', 17));
-
-        if ($out->lessThanOrEqualTo($in)) {
-            return response()->json(['message' => 'Your time out must be after your time in (' . $in->format('g:i A') . ').'], 422);
-        }
-        if ($out->greaterThan($latest)) {
+        if (!Supervision::supervisorOf($auth->id)) {
             return response()->json([
-                'message' => 'A forgotten time out can be at most ' . $latest->format('g:i A') . '. Overtime can\'t be added this way.',
+                'message' => "You don't have an HTE supervisor assigned yet. Ask your OJT coordinator to assign one first.",
             ], 422);
         }
 
@@ -77,6 +110,92 @@ class TimeCorrectionController extends Controller
             'user_id'       => $auth->id,
             'attendance_id' => $rec->id,
             'date'          => $day,
+            'kind'          => $kind,
+            'requested_in'  => $requestedIn,
+            'requested_out' => $out,
+            'reason'        => $data['reason'],
+            'status'        => 'pending',
+            'created_at'    => $now,
+            'updated_at'    => $now,
+        ]);
+
+        $who  = $auth->name ?? 'An intern';
+        $when = Carbon::parse($day)->format('M j, Y');
+        Supervision::notifyReviewer(
+            $auth->id,
+            'Time Correction Request',
+            $kind === 'in'
+                ? "{$who} forgot to tap in on {$when} and asks for a time in of " . $requestedIn->format('g:i A')
+                    . ' (time out ' . $out->format('g:i A') . ').'
+                : "{$who} forgot to tap out on {$when} and asks for " . $out->format('g:i A') . '.',
+            'time_correction'
+        );
+
+        return response()->json(['message' => 'Request sent. Your HTE supervisor will review it.', 'id' => $id]);
+    }
+
+    // Missed the whole day (no tap at all): { kind: "day", date, time_in, time_out, reason }
+    // The supervisor approves it and the day is added to the intern's attendance.
+    private function storeDay(Request $request)
+    {
+        $data = $request->validate([
+            'date'     => 'required|date_format:Y-m-d',
+            'time_in'  => 'required|date_format:H:i',
+            'time_out' => 'required|date_format:H:i',
+            'reason'   => 'required|string|max:500',
+        ]);
+        $auth  = $request->attributes->get('auth_user');
+        $day   = $data['date'];
+        $today = Carbon::today('Asia/Manila')->toDateString();
+        $d     = Carbon::parse($day, 'Asia/Manila');
+
+        if ($day >= $today) {
+            return response()->json(['message' => 'Pick a past day. Today you can still tap at the kiosk.'], 422);
+        }
+        if ($d->isWeekend()) {
+            return response()->json(['message' => 'That day is a ' . $d->format('l') . '. Only weekdays can be added.'], 422);
+        }
+        if ($d->lt(Carbon::today('Asia/Manila')->subDays(30))) {
+            return response()->json(['message' => 'You can only ask for days in the last 30 days.'], 422);
+        }
+        if (!Supervision::internshipStarted($auth->id)) {
+            return response()->json(['message' => "Your internship hasn't started yet, so there is no day to add."], 422);
+        }
+        if (DB::table('attendance_records')->where('user_id', $auth->id)->where('date', $day)->exists()) {
+            return response()->json(['message' => 'That day already has attendance. Use "Request fix" on that day in My Attendance instead.'], 409);
+        }
+
+        $in     = Carbon::parse("{$day} {$data['time_in']}", 'Asia/Manila');
+        $out    = Carbon::parse("{$day} {$data['time_out']}", 'Asia/Manila');
+        $first  = $d->copy()->startOfDay()->addHours((int) config('ojt.tap_window.from', 6));
+        $latest = $d->copy()->startOfDay()->addHours((int) config('ojt.schedule.pm_out', 17));
+        if ($out->lessThanOrEqualTo($in)) {
+            return response()->json(['message' => 'Your time out must be after your time in.'], 422);
+        }
+        if ($in->lessThan($first)) {
+            return response()->json(['message' => 'Your time in can\'t be earlier than ' . $first->format('g:i A') . '.'], 422);
+        }
+        if ($out->greaterThan($latest)) {
+            return response()->json(['message' => 'Your time out can be at most ' . $latest->format('g:i A') . '. Overtime can\'t be added this way.'], 422);
+        }
+        if (!Supervision::supervisorOf($auth->id)) {
+            return response()->json([
+                'message' => "You don't have an HTE supervisor assigned yet. Ask your OJT coordinator to assign one first.",
+            ], 422);
+        }
+        $pending = DB::table('time_corrections')->where('user_id', $auth->id)->where('date', $day)
+            ->whereIn('status', ['pending', 'endorsed'])->exists();
+        if ($pending) {
+            return response()->json(['message' => 'You already sent a request for this day.'], 409);
+        }
+
+        $now = Carbon::now('Asia/Manila');
+        $id  = DB::table('time_corrections')->insertGetId([
+            'user_id'       => $auth->id,
+            'attendance_id' => null,
+            'date'          => $day,
+            'kind'          => 'day',
+            'requested_in'  => $in,
             'requested_out' => $out,
             'reason'        => $data['reason'],
             'status'        => 'pending',
@@ -87,104 +206,11 @@ class TimeCorrectionController extends Controller
         Supervision::notifyReviewer(
             $auth->id,
             'Time Correction Request',
-            ($auth->name ?? 'An intern') . ' forgot to tap out on ' . Carbon::parse($day)->format('M j, Y')
-                . ' and asks for ' . $out->format('g:i A') . '.',
+            ($auth->name ?? 'An intern') . ' has no tap on ' . $d->format('M j, Y') . ' and asks to add '
+                . $in->format('g:i A') . ' – ' . $out->format('g:i A') . '.',
             'time_correction'
         );
 
-        return response()->json(['message' => 'Request sent. Your OJT coordinator will review it.', 'id' => $id]);
-    }
-
-    // GET /api/coordinator/time-corrections  -> pending first, then reviewed (newest first)
-    public function index()
-    {
-        $rows = DB::table('time_corrections as c')
-            ->join('users as u', 'u.id', '=', 'c.user_id')
-            ->leftJoin('attendance_records as a', 'a.id', '=', 'c.attendance_id')
-            ->leftJoin('users as r', 'r.id', '=', 'c.reviewed_by')
-            ->leftJoin('users as e', 'e.id', '=', 'c.endorsed_by')
-            ->leftJoin('users as s', 's.id', '=', 'u.supervisor_id')
-            ->select(
-                'c.*', 'a.checked_in_at', 'u.supervisor_id',
-                'u.name as intern_name', 'u.email as intern_email', 'u.photo as intern_photo',
-                'r.name as reviewer_name', 'e.name as endorser_name', 's.name as supervisor_name'
-            )
-            ->orderByRaw("CASE c.status WHEN 'endorsed' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END")
-            ->orderByDesc('c.date')
-            ->orderByDesc('c.id')
-            ->get();
-
-        return response()->json($rows);
-    }
-
-    // POST /api/coordinator/time-corrections/{id}/review   { status: approved|rejected, remarks? }
-    public function review(Request $request, $id)
-    {
-        $data = $request->validate([
-            'status'  => 'required|in:approved,rejected',
-            'remarks' => 'nullable|string|max:300',
-        ]);
-
-        $req = DB::table('time_corrections')->where('id', $id)->first();
-        if (!$req) {
-            return response()->json(['message' => 'Request not found.'], 404);
-        }
-        // step 2: after the supervisor confirmed it ("endorsed"); a "pending" one only when there is no supervisor
-        $hasSupervisor = Supervision::supervisorOf($req->user_id) !== null;
-        $from = $req->status === 'endorsed' ? 'endorsed' : (($req->status === 'pending' && !$hasSupervisor) ? 'pending' : null);
-        if (!$from) {
-            return response()->json([
-                'message' => $req->status === 'pending'
-                    ? "Waiting for the intern's supervisor to review it first."
-                    : 'This request was already reviewed.',
-            ], 409);
-        }
-
-        $auth = $request->attributes->get('auth_user');
-        $now  = Carbon::now('Asia/Manila');
-
-        $result = DB::transaction(function () use ($req, $data, $auth, $now, $from) {
-            if ($data['status'] === 'approved') {
-                // save the time out only if the record still has none
-                $fixed = DB::table('attendance_records')
-                    ->where('id', $req->attendance_id)
-                    ->whereNull('checked_out_at')
-                    ->update([
-                        'action'         => 'CHECK_OUT',
-                        'checked_out_at' => $req->requested_out,
-                        'updated_at'     => $now,
-                    ]);
-                if (!$fixed) return 'conflict';
-            }
-
-            DB::table('time_corrections')->where('id', $req->id)->where('status', $from)->update([
-                'status'      => $data['status'],
-                'remarks'     => $data['remarks'] ?? null,
-                'reviewed_by' => $auth->id ?? null,
-                'reviewed_at' => $now,
-                'updated_at'  => $now,
-            ]);
-            return 'ok';
-        });
-
-        if ($result === 'conflict') {
-            return response()->json(['message' => 'That day already has a time out, so nothing was changed.'], 409);
-        }
-
-        $when = Carbon::parse($req->date)->format('M j, Y');
-        $time = Carbon::parse($req->requested_out, 'Asia/Manila')->format('g:i A');
-        Notifier::toUser(
-            $req->user_id,
-            $data['status'] === 'approved' ? 'Time Correction Approved' : 'Time Correction Rejected',
-            ($data['status'] === 'approved'
-                ? "Your time out on {$when} was set to {$time}."
-                : "Your time correction for {$when} was rejected.")
-                . (!empty($data['remarks']) ? ' Remarks: ' . $data['remarks'] : ''),
-            'time_correction_review'
-        );
-
-        return response()->json([
-            'message' => $data['status'] === 'approved' ? "Approved. Time out set to {$time}." : 'Request rejected.',
-        ]);
+        return response()->json(['message' => 'Request sent. Your HTE supervisor will review it.', 'id' => $id]);
     }
 }

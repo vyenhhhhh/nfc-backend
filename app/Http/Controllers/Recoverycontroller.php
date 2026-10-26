@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 class RecoveryController extends Controller
@@ -104,10 +105,10 @@ class RecoveryController extends Controller
         $user = $this->checkedUser($request);   // "password" = the current password
         if (!$user) return response()->json(['message' => 'Your current password is wrong.'], 403);
 
-        DB::table('users')->where('id', $user->id)->update([
+        DB::table('users')->where('id', $user->id)->update(array_merge([
             'password'   => Hash::make($request->new_password),
             'updated_at' => Carbon::now('Asia/Manila'),
-        ]);
+        ], Schema::hasColumn('users', 'must_change_password') ? ['must_change_password' => false] : []));
 
         // sign out every other device, keep this one
         $auth = $request->attributes->get('auth_user');
@@ -176,10 +177,10 @@ class RecoveryController extends Controller
             return response()->json(['message' => 'This reset window has expired. Please start again.'], 422);
         }
 
-        DB::table('users')->where('id', $pass->user_id)->update([
+        DB::table('users')->where('id', $pass->user_id)->update(array_merge([
             'password'   => Hash::make($request->new_password),
             'updated_at' => Carbon::now('Asia/Manila'),
-        ]);
+        ], Schema::hasColumn('users', 'must_change_password') ? ['must_change_password' => false] : []));
 
         DB::table('recovery_resets')->where('user_id', $pass->user_id)->delete();
         $this->codeFor($pass->user_id, true);                                    // the old code is used up

@@ -26,18 +26,18 @@ class OnlineSubmissionController extends Controller
             return response()->json(['message' => "You can't submit attendance for a future date."], 422);
         }
 
-        // online days are for interns with an approved WFH arrangement (letter from the HTE)
-        if (config('ojt.online_requires_wfh', true)
+        // any intern may log a day from home; set ojt.online_requires_wfh = true to allow WFH interns only
+        if (config('ojt.online_requires_wfh', false)
             && DB::table('users')->where('id', $request->user_id)->value('work_mode') !== 'offsite') {
             return response()->json([
                 'message' => 'Online attendance is for approved work-from-home only. Request WFH first (with the letter from your HTE).',
             ], 403);
         }
 
-        // hours only count after the MOA is approved (Internship FAQ #6–7)
-        if (!Supervision::moaApproved((int) $request->user_id)) {
+        // the internship starts only when ALL pre-internship requirements are approved
+        if (!Supervision::internshipStarted((int) $request->user_id)) {
             return response()->json([
-                'message' => 'Your MOA is not approved yet. Online attendance opens once your OJT coordinator approves it.',
+                'message' => 'Your internship has not started yet. Online attendance opens once all your pre-internship requirements are approved.',
             ], 403);
         }
 

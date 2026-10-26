@@ -19,11 +19,20 @@ class MovController extends Controller
             'title'   => 'required|string|max:150',
             'requirement' => 'nullable|string|max:60',
             'phase'       => 'nullable|in:pre,during,post',
+            'report_id'   => 'nullable|integer',     // the coordinator's report this upload answers (weekly / monthly report)
             'file'    => 'required|file|mimes:pdf,jpg,jpeg,png,doc,docx|max:10240', // 10MB
         ]);
 
         $phase       = $request->input('phase', 'pre');
         $requirement = $request->input('requirement') ?: 'others';
+
+        // During-internship documents open only when the internship has started
+        // (every pre-internship requirement approved by the coordinator)
+        if ($phase === 'during' && !\App\Services\Supervision::internshipStarted((int) $request->user_id)) {
+            return response()->json([
+                'message' => 'During-internship requirements open once all your pre-internship requirements are approved.',
+            ], 403);
+        }
 
         // Post-internship documents open only after the required hours are done
         if ($phase === 'post') {
@@ -53,12 +62,28 @@ class MovController extends Controller
             }
         }
 
-        $path = $request->file('file')->store('movs', 'public');
+        // a weekly / monthly report goes into one of the reports the coordinator asked for
+        $reportId = $request->filled('report_id') ? (int) $request->report_id : null;
+        $title = $request->title;
+        if ($reportId) {
+            $report = ReportController::allowsIntern($reportId, (int) $request->user_id);
+            if (!$report) return response()->json(['message' => 'This report is not for you.'], 403);
+            // one live upload per report (a returned one can be uploaded again)
+            $sent = DB::table('movs')->where('user_id', $request->user_id)->where('report_id', $reportId)
+                ->whereIn('status', ['pending', 'approved'])->exists();
+            if ($sent) return response()->json(['message' => 'You already sent this report.'], 409);
+            $requirement = 'weekly_report';
+            $phase = 'during';
+            $title = $report->title;
+        }
+
+        $path = $request->file('file')->store('movs', config('filesystems.uploads', 'public'));
 
         $id = DB::table('movs')->insertGetId([
             'user_id'       => $request->user_id,
-            'title'         => $request->title,
+            'title'         => $title,
             'requirement'   => $requirement,
+            'report_id'     => $reportId,
             'phase'         => $phase,
             'file_path'     => $path,
             'original_name' => $request->file('file')->getClientOriginalName(),
@@ -72,7 +97,7 @@ class MovController extends Controller
         Notifier::toRoles(
             ['ojt_coordinator'],
             'New MOV Submitted',
-            ($intern->name ?? 'An intern') . ' submitted "' . $request->title . '" for review.',
+            ($intern->name ?? 'An intern') . ' submitted "' . $title . '" for review.',
             'mov_submission'
         );
 
@@ -93,7 +118,7 @@ class MovController extends Controller
             return response()->json(['message' => 'Only pending submissions can be removed.'], 409);
         }
 
-        if ($mov->file_path) Storage::disk('public')->delete($mov->file_path);
+        if ($mov->file_path) Storage::disk(config('filesystems.uploads', 'public'))->delete($mov->file_path);
         DB::table('movs')->where('id', $id)->delete();
 
         return response()->json(['message' => 'Submission removed.']);
@@ -104,8 +129,10 @@ class MovController extends Controller
     {
         $movs = DB::table('movs as m')
             ->join('users as u', 'u.id', '=', 'm.user_id')
+            ->leftJoin('report_schedules as rs', 'rs.id', '=', 'm.report_id')   // which report it answers
             ->orderByDesc('m.created_at')
-            ->select('m.*', 'u.name as intern_name', 'u.email as intern_email', 'u.photo as intern_photo')
+            ->select('m.*', 'u.name as intern_name', 'u.email as intern_email', 'u.photo as intern_photo',
+                'rs.title as report_title', 'rs.due_date as report_due')
             ->get();
 
         return response()->json($movs);
@@ -160,6 +187,41 @@ class MovController extends Controller
         );
 
         return response()->json(['message' => 'Submission ' . $request->status . '.']);
+    }
+
+    // POST /coordinator/movs/{id}/undo
+    // The coordinator takes back a decision made by mistake: the submission goes back to "waiting for review".
+    // Only the OJT coordinator can do this (the admin can't).
+    public function undoReview(Request $request, $id)
+    {
+        $auth = $request->attributes->get('auth_user');
+        if (!$auth || $auth->role !== 'ojt_coordinator') {
+            return response()->json(['message' => 'Only the OJT coordinator can undo a review.'], 403);
+        }
+
+        $mov = DB::table('movs')->where('id', $id)->first();
+        if (!$mov) return response()->json(['message' => 'Submission not found.'], 404);
+
+        $was = $mov->status;
+        $changed = DB::table('movs')->where('id', $id)->whereIn('status', ['approved', 'rejected'])->update([
+            'status'      => 'pending',
+            'remarks'     => null,
+            'reviewed_by' => null,
+            'reviewed_at' => null,
+            'updated_at'  => Carbon::now(),
+        ]);
+        if (!$changed) {
+            return response()->json(['message' => 'This submission is already waiting for review.'], 409);
+        }
+
+        Notifier::toUser(
+            $mov->user_id,
+            'MOV Review Undone',
+            'Your "' . $mov->title . '" was marked ' . $was . ' by mistake. It is back to waiting for review.',
+            'mov_review'
+        );
+
+        return response()->json(['message' => 'Done. "' . $mov->title . '" is back to waiting for review.']);
     }
 
     // Required hours for a program such as "BSIT - 4" (set in config/ojt.php)

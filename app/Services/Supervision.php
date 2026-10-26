@@ -38,16 +38,31 @@ class Supervision
         return $id ? (int) $id : null;
     }
 
-    /** Hours only count after the MOA is approved (Internship FAQ #6–7). */
-    public static function moaApproved($internId): bool
+    /**
+     * Pre-internship requirements that are not approved yet (empty = the internship can start).
+     * The internship starts only when every pre-internship requirement is approved by the coordinator.
+     */
+    public static function missingPreRequirements($internId): array
     {
-        if (!config('ojt.require_moa', true)) return true;
+        if (!config('ojt.require_pre_requirements', true)) return [];
 
-        return DB::table('movs')
+        $required = config('ojt.pre_requirements', []);
+        $approved = DB::table('movs')
             ->where('user_id', $internId)
-            ->where('requirement', 'moa')
+            ->whereIn('requirement', $required)
+            ->where(function ($q) { $q->where('phase', 'pre')->orWhereNull('phase'); })
             ->where('status', 'approved')
-            ->exists();
+            ->pluck('requirement')
+            ->unique()
+            ->all();
+
+        return array_values(array_diff($required, $approved));
+    }
+
+    /** True when every pre-internship requirement is approved (the internship has started). */
+    public static function internshipStarted($internId): bool
+    {
+        return count(self::missingPreRequirements($internId)) === 0;
     }
 
     /** Tell the intern's supervisor, or the coordinators when no supervisor is assigned. */

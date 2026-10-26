@@ -50,6 +50,11 @@ class LiveController extends Controller
 
         $rows = $parts ? DB::select(implode(' UNION ALL ', $parts)) : [];
 
+        // the database may return the rows in a different order each time; sort them so the
+        // fingerprint only changes when the data really changes (otherwise pages reload for nothing)
+        $rows = array_map(fn ($r) => [(string) $r->t, (string) $r->c, (string) $r->m, (string) $r->u], $rows);
+        sort($rows);
+
         return response()->json(['v' => md5(json_encode($rows))])
             ->header('Cache-Control', 'no-store');
     }

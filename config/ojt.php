@@ -40,10 +40,18 @@ return [
     'block_weekends' => true,                        // no check-ins on Saturdays and Sundays
     'block_holidays' => true,                        // no check-ins on holidays / non-working days in the Calendar
 
-    // Hours only count after the intern's MOA is approved (Internship FAQ #6–7):
-    // the kiosk and online attendance refuse an intern whose "MOA" requirement is not approved yet.
-    'require_moa' => true,
+    // The internship starts only when ALL pre-internship requirements are approved by the coordinator.
+    // Until then the kiosk and online attendance refuse the intern, and the During-internship
+    // requirements stay locked. Keep this list the same as PRE_REQUIREMENTS in DashKit.jsx.
+    'require_pre_requirements' => true,
+    'pre_requirements' => [
+        'capstone_summary', 'letter_of_intent', 'endorsement_letter', 'moa', 'internship_contract',
+        'internship_plan', 'medical_certificate', 'personal_history', 'parents_consent', 'pledge',
+        'acceptance_form', 'insurance', 'orientation',
+    ],
 
-    // Online attendance is only for interns with an approved WFH arrangement (work mode "offsite").
-    'online_requires_wfh' => true,
+    // Online attendance: any intern may log a day they worked from home (their HTE supervisor confirms it,
+    // then the OJT coordinator approves it). A WFH arrangement with the HTE's letter is only for interns who
+    // work from home for the whole semester. Set to true to allow online days for WFH interns only.
+    'online_requires_wfh' => false,
 ];

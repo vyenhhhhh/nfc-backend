@@ -12,8 +12,10 @@ use Illuminate\Support\Facades\DB;
 /**
  * The HTE supervisor's part (from the OJT coordinator's answers: "the DTRs should be validated by the
  * respective supervisors"):
- *  - overtime and forgotten time-outs of their own interns: approve (sent on to the OJT coordinator for the
- *    final decision, status "endorsed") or reject
+ *  - overtime of their own interns: approve (sent on to the OJT coordinator for the final decision,
+ *    status "endorsed") or reject
+ *  - forgotten time-outs and work arrangement (WFH / back onsite) of their own interns: the supervisor's
+ *    decision is final (from the OJT coordinator: these are the HTE supervisor's work, not hers)
  *  - certify an intern's DTR for a period (e.g. Oct 1–15)
  */
 class SupervisorController extends Controller
@@ -108,7 +110,7 @@ class SupervisorController extends Controller
         ]);
     }
 
-    /* ───────────── Time corrections (forgotten time-outs) ───────────── */
+    /* ───────────── Time corrections (forgotten time-outs and time-ins) ───────────── */
 
     // GET /api/supervisor/time-corrections
     public function corrections(Request $request)
@@ -131,6 +133,7 @@ class SupervisorController extends Controller
     }
 
     // POST /api/supervisor/time-corrections/{id}/review   { status: approved|rejected, remarks? }
+    // Final: approving saves the time out right away (no coordinator step).
     public function reviewCorrection(Request $request, $id)
     {
         $data = $request->validate([
@@ -143,45 +146,106 @@ class SupervisorController extends Controller
         if (!$req || !Supervision::supervises($auth, $req->user_id)) {
             return response()->json(['message' => 'Request not found.'], 404);
         }
-
-        $now = Carbon::now('Asia/Manila');
-        $approve = $data['status'] === 'approved';
-
-        $changed = DB::table('time_corrections')
-            ->where('id', $id)
-            ->where('status', 'pending')
-            ->update(array_merge([
-                'status'          => $approve ? 'endorsed' : 'rejected',
-                'endorsed_by'     => $auth->id,
-                'endorsed_at'     => $now,
-                'endorse_remarks' => $data['remarks'] ?? null,
-                'updated_at'      => $now,
-            ], $approve ? [] : [
-                'remarks'     => $data['remarks'] ?? null,
-                'reviewed_by' => $auth->id,
-                'reviewed_at' => $now,
-            ]));
-
-        if (!$changed) {
+        // "endorsed" = confirmed under the old two-step flow and still waiting; the supervisor can finish it now
+        if (!in_array($req->status, ['pending', 'endorsed'], true)) {
             return response()->json(['message' => 'This request was already reviewed.'], 409);
         }
 
-        $intern = DB::table('users')->where('id', $req->user_id)->value('name') ?? 'An intern';
-        $when   = Carbon::parse($req->date)->format('M j, Y');
-        $time   = Carbon::parse($req->requested_out, 'Asia/Manila')->format('g:i A');
-        if ($approve) {
-            Notifier::toRoles(['ojt_coordinator'], 'Time Correction for Final Approval',
-                "{$auth->name} confirmed {$intern} left at {$time} on {$when}.", 'time_correction');
-            Notifier::toUser($req->user_id, 'Time Correction Confirmed by Supervisor',
-                "Your supervisor confirmed your time out ({$time}) on {$when}. Waiting for your OJT coordinator.", 'time_correction_review');
-        } else {
-            Notifier::toUser($req->user_id, 'Time Correction Rejected',
-                "Your supervisor rejected your time correction for {$when}."
-                    . (!empty($data['remarks']) ? ' Remarks: ' . $data['remarks'] : ''), 'time_correction_review');
+        $now     = Carbon::now('Asia/Manila');
+        $approve = $data['status'] === 'approved';
+
+        try {
+            $result = DB::transaction(function () use ($req, $data, $auth, $now, $approve) {
+                if ($approve && ($req->kind ?? 'out') === 'day') {
+                    // missed the whole day: add it, unless the day got attendance in the meantime
+                    if (DB::table('attendance_records')->where('user_id', $req->user_id)->where('date', $req->date)->exists()) {
+                        return 'conflict';
+                    }
+                    $newId = DB::table('attendance_records')->insertGetId([
+                        'user_id'        => $req->user_id,
+                        'uid'            => 'CORRECTION',          // added by an approved time correction (not a card tap)
+                        'date'           => $req->date,
+                        'action'         => 'CHECK_OUT',
+                        'token'          => 'correction:' . $req->id,
+                        'checked_in_at'  => $req->requested_in,
+                        'checked_out_at' => $req->requested_out,
+                        'created_at'     => $now,
+                        'updated_at'     => $now,
+                    ]);
+                    DB::table('time_corrections')->where('id', $req->id)->update(['attendance_id' => $newId]);
+                } elseif ($approve && ($req->kind ?? 'out') === 'in') {
+                    // forgot to tap in: set the time in; the time out is the one in the request
+                    // (only if the day's time out has not changed since the request was sent)
+                    $fixed = DB::table('attendance_records')
+                        ->where('id', $req->attendance_id)
+                        ->where(fn ($q) => $q->whereNull('checked_out_at')->orWhere('checked_out_at', $req->requested_out))
+                        ->update([
+                            'action'         => 'CHECK_OUT',
+                            'checked_in_at'  => $req->requested_in,
+                            'checked_out_at' => $req->requested_out,
+                            'updated_at'     => $now,
+                        ]);
+                    if (!$fixed) return 'conflict';
+                } elseif ($approve) {
+                    // save the time out only if the day still has none
+                    $fixed = DB::table('attendance_records')
+                        ->where('id', $req->attendance_id)
+                        ->whereNull('checked_out_at')
+                        ->update([
+                            'action'         => 'CHECK_OUT',
+                            'checked_out_at' => $req->requested_out,
+                            'updated_at'     => $now,
+                        ]);
+                    if (!$fixed) return 'conflict';
+                }
+
+                $n = DB::table('time_corrections')
+                    ->where('id', $req->id)
+                    ->whereIn('status', ['pending', 'endorsed'])
+                    ->update([
+                        'status'          => $data['status'],
+                        'remarks'         => $data['remarks'] ?? null,
+                        'endorsed_by'     => $req->endorsed_by ?? $auth->id,
+                        'endorsed_at'     => $req->endorsed_at ?? $now,
+                        'endorse_remarks' => $req->endorse_remarks ?? ($data['remarks'] ?? null),
+                        'reviewed_by'     => $auth->id,
+                        'reviewed_at'     => $now,
+                        'updated_at'      => $now,
+                    ]);
+                if (!$n) throw new \RuntimeException('already');   // undoes the time out saved above
+                return 'ok';
+            });
+        } catch (\RuntimeException $e) {
+            return response()->json(['message' => 'This request was already reviewed.'], 409);
         }
 
+        $isIn  = ($req->kind ?? 'out') === 'in';
+        $isDay = ($req->kind ?? 'out') === 'day';
+        if ($result === 'conflict' && $isDay) {
+            return response()->json(['message' => 'That day already has attendance now, so nothing was added.'], 409);
+        }
+        if ($result === 'conflict') {
+            return response()->json(['message' => $isIn
+                ? 'That day\'s time out changed after the request was sent, so nothing was changed.'
+                : 'That day already has a time out, so nothing was changed.'], 409);
+        }
+
+        $when = Carbon::parse($req->date)->format('M j, Y');
+        $time = Carbon::parse($req->requested_out, 'Asia/Manila')->format('g:i A');
+        $inAt = ($isIn || $isDay) ? Carbon::parse($req->requested_in, 'Asia/Manila')->format('g:i A') : null;
+        $set  = ($isIn || $isDay) ? "time in {$inAt}, time out {$time}" : "time out {$time}";
+        Notifier::toUser(
+            $req->user_id,
+            $approve ? 'Time Correction Approved' : 'Time Correction Rejected',
+            ($approve
+                ? "Your supervisor approved your time correction on {$when}: {$set}."
+                : "Your supervisor rejected your time correction for {$when}.")
+                . (!empty($data['remarks']) ? ' Remarks: ' . $data['remarks'] : ''),
+            'time_correction_review'
+        );
+
         return response()->json([
-            'message' => $approve ? 'Confirmed. Sent to the OJT coordinator for the final decision.' : 'Request rejected.',
+            'message' => $approve ? "Approved. Saved {$set}." : 'Request rejected.',
         ]);
     }
 

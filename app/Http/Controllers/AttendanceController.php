@@ -2,6 +2,7 @@
 //attendancecontroller.php
 namespace App\Http\Controllers;
 
+use App\Services\Activity;
 use App\Services\Notifier;
 use App\Services\OjtHours;
 use App\Services\Supervision;
@@ -18,15 +19,18 @@ class AttendanceController extends Controller
     // ── NFC Tap ───────────────────────────────────────────
     public function tap(Request $request)
     {
-        // only the kiosk may record taps (stops anyone who knows a card UID from tapping for someone)
-        $key = (string) config('ojt.kiosk_key');
-        if ($key === '' || !hash_equals($key, (string) $request->header('X-Kiosk-Key'))) {
+        // only a registered kiosk may record taps (stops anyone who knows a card UID from tapping for someone).
+        // Each kiosk has its own key (Accounts → Kiosks); KIOSK_KEY in .env still works as the main CCIS kiosk.
+        $sent  = (string) $request->header('X-Kiosk-Key');
+        $kiosk = AccountController::kioskFor($sent);
+        if (!$kiosk['ok']) {
             return response()->json([
-                'message' => $key === ''
-                    ? 'The kiosk is not set up yet (KIOSK_KEY is missing on the server).'
+                'message' => $sent === ''
+                    ? 'The kiosk is not set up yet. Ask the admin for this kiosk\'s key.'
                     : 'This device is not an authorized attendance kiosk.',
             ], 401);
         }
+        $kiosk = $kiosk['kiosk'];   // null = main CCIS kiosk
 
         $request->validate(['uid' => 'required|string|max:64']);
 
@@ -42,6 +46,23 @@ class AttendanceController extends Controller
         }
 
         $intern = DB::table('users')->where('id', $card->user_id)->first();
+
+        // graduated / deactivated accounts can't tap
+        if (!empty($intern->deactivated_at ?? null)) {
+            Activity::record($intern, 'Tap refused: account deactivated', 'kiosk: ' . ($kiosk->name ?? 'CCIS (main)'), $request);
+            return response()->json([
+                'code' => 'TAP_BLOCKED', 'name' => $intern->name ?? null, 'photo' => $intern->photo ?? null,
+                'message' => 'This account is deactivated. This tap was not recorded.',
+            ], 403);
+        }
+        // an HTE kiosk only accepts the interns placed at that HTE (CCIS kiosks accept everyone)
+        if (!AccountController::kioskAllows($kiosk, $intern)) {
+            Activity::record($intern, 'Tap refused: wrong kiosk', "kiosk: {$kiosk->name} ({$kiosk->placement}) · intern placed at: " . ($intern->placement ?: 'none'), $request);
+            return response()->json([
+                'code' => 'TAP_BLOCKED', 'name' => $intern->name ?? null, 'photo' => $intern->photo ?? null,
+                'message' => "This kiosk is only for interns placed at {$kiosk->placement}. Please tap at your own HTE's kiosk or at CCIS. This tap was not recorded.",
+            ], 403);
+        }
 
         // DTR type (set per intern, depends on the HTI):
         //   two  = 2 taps a day: in (AM) and out (PM), lunch break not counted
@@ -89,10 +110,13 @@ class AttendanceController extends Controller
             $window  = config('ojt.tap_window');
             $hourNow = $now->hour + $now->minute / 60;
 
-            // hours only count after the MOA is approved (Internship FAQ #6–7)
-            if (!Supervision::moaApproved($card->user_id)) {
-                $blocked = 'Your MOA is not approved yet, so your hours cannot be counted. '
-                    . 'Upload it under Submit MOV and wait for your OJT coordinator to approve it.';
+            // the internship starts only when ALL pre-internship requirements are approved
+            $missing = Supervision::missingPreRequirements($card->user_id);
+            if (count($missing) > 0) {
+                $total   = count(config('ojt.pre_requirements', []));
+                $blocked = 'Your internship has not started yet: ' . ($total - count($missing)) . " of {$total} "
+                    . 'pre-internship requirements are approved. Complete them under Submit MOV and wait for '
+                    . 'your OJT coordinator to approve them.';
             }
 
             if (!$blocked && config('ojt.block_holidays', false)) {
@@ -303,7 +327,7 @@ class AttendanceController extends Controller
             'student_id'     => 'required|string|max:50|unique:users,student_id',  // student ID, or employee ID for staff
             'contact_number' => 'nullable|string|max:20',
             'address'        => 'nullable|string|max:255',
-            'placement'      => 'nullable|required_if:role,intern|string|max:150',
+            'placement'      => 'nullable|required_if:role,intern|required_if:role,supervisor|string|max:150',  // intern: placement · supervisor: their HTE
             'semester'       => 'nullable|required_if:role,intern|in:1st Semester,2nd Semester',
             'program'        => 'nullable|required_if:role,intern|in:BSIT - 4,BSCS - 4,BSIS - 4',
             'email'          => 'required|email|unique:users,email',
@@ -340,7 +364,7 @@ class AttendanceController extends Controller
 
         $photoPath = null;
         if ($request->hasFile('photo')) {
-            $photoPath = $request->file('photo')->store('profiles', 'public');
+            $photoPath = $request->file('photo')->store('profiles', config('filesystems.uploads', 'public'));
         }
 
         $userId = DB::table('users')->insertGetId([
@@ -353,7 +377,8 @@ class AttendanceController extends Controller
             'contact_number' => $data['contact_number'] ?? null,
             'address'        => $data['address'] ?? null,
             'date_of_birth'  => Carbon::parse($data['date_of_birth'])->toDateString(),
-            'placement'      => $isIntern ? ($data['placement'] ?? null) : null,
+            // intern: where they are placed · supervisor: the HTE (company/office) they work for
+            'placement'      => ($isIntern || ($data['role'] ?? '') === 'supervisor') ? ($data['placement'] ?? null) : null,
             'semester'       => $isIntern ? ($data['semester'] ?? null) : null,
             'program'        => $isIntern ? ($data['program'] ?? null) : null,
             'college'        => $isIntern ? 'CCIS' : null,
@@ -372,21 +397,9 @@ class AttendanceController extends Controller
             'updated_at'     => $now,
         ]);
 
-        $nfcRegistered = false;
-
-        if (!empty($data['uid']) && $isIntern) {
-            DB::table('nfc_cards')->insert([
-                'user_id'    => $userId,
-                'uid'        => strtoupper(trim($data['uid'])),
-                'created_at' => $now,
-            ]);
-            $nfcRegistered = true;
-        }
-
+        // NFC cards are not linked here: every intern follows the same steps
+        // (request → coordinator approves → intern signs → admin prints → admin links in Card Requests)
         $message = 'User added successfully.';
-        if ($nfcRegistered) {
-            $message .= ' NFC card (UID: ' . strtoupper(trim($data['uid'])) . ') registered.';
-        }
 
         return response()->json([
             'message' => $message,
@@ -438,6 +451,17 @@ class AttendanceController extends Controller
         $isIntern = $user->role === 'intern';
         $uid      = strtoupper(trim($data['uid'] ?? ''));
 
+        // a new card is linked only through Card Requests (after approval and printing);
+        // here the admin can keep the current card or unlink it (e.g. a lost card)
+        if ($isIntern && $uid !== '') {
+            $current = DB::table('nfc_cards')->where('user_id', $id)->value('uid');
+            if (strtoupper((string) $current) !== $uid) {
+                return response()->json([
+                    'message' => 'New cards are linked in Accounts → Card Requests, after the request is approved and the card is printed. Here you can only unlink a card.',
+                ], 422);
+            }
+        }
+
         // the card can't already belong to someone else
         if ($isIntern && $uid !== '') {
             $taken = DB::table('nfc_cards')
@@ -484,6 +508,11 @@ class AttendanceController extends Controller
 
         if (isset($data['student_id']) && trim((string) $data['student_id']) !== '') {
             $update['student_id'] = trim($data['student_id']);   // student ID, or employee ID for staff
+        }
+
+        // a supervisor's HTE (company/office) is kept in the same "placement" field as an intern's placement
+        if ($user->role === 'supervisor' && array_key_exists('placement', $data)) {
+            $update['placement'] = $data['placement'] ?? null;
         }
 
         if ($isIntern) {
@@ -564,7 +593,7 @@ class AttendanceController extends Controller
                 if (Schema::hasTable('movs')) {
                     $files = DB::table('movs')->where('user_id', $id)->pluck('file_path');
                     foreach ($files as $f) {
-                        if ($f) Storage::disk('public')->delete($f);
+                        if ($f) Storage::disk(config('filesystems.uploads', 'public'))->delete($f);
                     }
                     DB::table('movs')->where('user_id', $id)->delete();
 
@@ -611,6 +640,10 @@ class AttendanceController extends Controller
         if (!$user) {
             return response()->json(['message' => 'User not found.'], 404);
         }
+        $auth = $request->attributes->get('auth_user');
+        if (($auth->role ?? '') === 'supervisor' && !Supervision::supervises($auth, $id)) {
+            return response()->json(['message' => 'You can only change the settings of your own interns.'], 403);
+        }
 
         DB::table('users')->where('id', $id)->update([
             'work_mode'     => $request->work_mode,
@@ -618,6 +651,52 @@ class AttendanceController extends Controller
         ]);
 
         return response()->json(['message' => 'Intern settings updated.']);
+    }
+
+    // ── Assign (or remove) an intern's HTE supervisor ─────────────────────────────────
+    // PATCH /api/coordinator/interns/{id}/supervisor   { supervisor_id: 12 | null }
+    // Done by the OJT coordinator (or the admin). The supervisor then reviews the intern's
+    // time corrections, work arrangement, online days and overtime, and certifies the DTR.
+    public function assignSupervisor(Request $request, $id)
+    {
+        $data = $request->validate([
+            'supervisor_id' => 'nullable|integer',
+        ]);
+
+        $intern = DB::table('users')->where('id', $id)->where('role', 'intern')->first();
+        if (!$intern) {
+            return response()->json(['message' => 'Intern not found.'], 404);
+        }
+
+        $supId = $data['supervisor_id'] ?? null;
+        $sup   = null;
+        if ($supId) {
+            $sup = DB::table('users')->where('id', $supId)->where('role', 'supervisor')->first();
+            if (!$sup) {
+                return response()->json(['message' => 'That supervisor account was not found.'], 422);
+            }
+        }
+        if ((int) ($intern->supervisor_id ?? 0) === (int) ($supId ?? 0)) {
+            return response()->json(['message' => 'Nothing changed.']);
+        }
+
+        DB::table('users')->where('id', $id)->update([
+            'supervisor_id' => $supId,
+            'updated_at'    => Carbon::now('Asia/Manila'),
+        ]);
+
+        if ($sup) {
+            Notifier::toUser($intern->id, 'HTE Supervisor Assigned',
+                "{$sup->name} is now your HTE supervisor.", 'supervisor_assigned');
+            Notifier::toUser($sup->id, 'New Intern Assigned',
+                "{$intern->name} was assigned to you. You can now see their attendance and review their requests.", 'supervisor_assigned');
+        }
+
+        return response()->json([
+            'message' => $sup ? "{$sup->name} is now {$intern->name}'s supervisor." : "{$intern->name} has no supervisor now.",
+            'supervisor_id'   => $supId,
+            'supervisor_name' => $sup->name ?? null,
+        ]);
     }
 
     // ── Update User Photo ─────────────────────────────────
@@ -634,10 +713,10 @@ class AttendanceController extends Controller
         }
 
         if ($user->photo) {
-            Storage::disk('public')->delete($user->photo);  
+            Storage::disk(config('filesystems.uploads', 'public'))->delete($user->photo);  
         }
 
-        $photoPath = $request->file('photo')->store('profiles', 'public');
+        $photoPath = $request->file('photo')->store('profiles', config('filesystems.uploads', 'public'));
 
         DB::table('users')
             ->where('id', $id)
