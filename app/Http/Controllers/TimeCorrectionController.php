@@ -8,9 +8,9 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Forgot to tap out, or forgot to tap in?
- *  - forgot to tap out: the intern sends the time they left (past days only; today they can still tap)
- *  - forgot to tap in: the intern sends when they arrived; if the day has only one tap
+ * Forgot to time out, or forgot to time in?
+ *  - forgot to time out: the intern sends the time they left (past days only; today they can still tap)
+ *  - forgot to time in: the intern sends when they arrived; if the day has only one tap
  *    (e.g. they tapped only when leaving), that tap becomes the time out
  *  - the intern's HTE supervisor approves it (the time out is saved right away and the day gets its
  *    hours) or rejects it — this is final, the OJT coordinator is not involved   (SupervisorController)
@@ -29,8 +29,8 @@ class TimeCorrectionController extends Controller
     }
 
     // POST /api/intern/time-corrections
-    //   forgot to tap out: { attendance_id, kind: "out", time_out: "17:00", reason }
-    //   forgot to tap in:  { attendance_id, kind: "in",  time_in:  "08:00", reason }
+    //   forgot to time out: { attendance_id, kind: "out", time_out: "17:00", reason }
+    //   forgot to time in:  { attendance_id, kind: "in",  time_in:  "08:00", reason }
     //     (if the day has only one tap, that tap becomes the time out)
     public function store(Request $request)
     {
@@ -62,7 +62,7 @@ class TimeCorrectionController extends Controller
                 return response()->json(['message' => 'This day already has a time out.'], 409);
             }
             if ($day >= $today) {
-                return response()->json(['message' => 'You can still tap out at the kiosk today.'], 422);
+                return response()->json(['message' => 'You can still time out at the kiosk today.'], 422);
             }
 
             $out    = Carbon::parse("{$day} {$data['time_out']}", 'Asia/Manila');
@@ -77,7 +77,7 @@ class TimeCorrectionController extends Controller
                 ], 422);
             }
         } else {
-            // forgot to tap in: the intern says when they really arrived (earlier than the saved tap)
+            // forgot to time in: the intern says when they really arrived (earlier than the saved tap)
             $requestedIn = Carbon::parse("{$day} {$data['time_in']}", 'Asia/Manila');
             $earliest    = $tap->copy()->startOfDay()->addHours((int) (config('ojt.tap_window.from', 6)));
 
@@ -125,9 +125,9 @@ class TimeCorrectionController extends Controller
             $auth->id,
             'Time Correction Request',
             $kind === 'in'
-                ? "{$who} forgot to tap in on {$when} and asks for a time in of " . $requestedIn->format('g:i A')
+                ? "{$who} forgot to time in on {$when} and asks for a time in of " . $requestedIn->format('g:i A')
                     . ' (time out ' . $out->format('g:i A') . ').'
-                : "{$who} forgot to tap out on {$when} and asks for " . $out->format('g:i A') . '.',
+                : "{$who} forgot to time out on {$when} and asks for " . $out->format('g:i A') . '.',
             'time_correction'
         );
 

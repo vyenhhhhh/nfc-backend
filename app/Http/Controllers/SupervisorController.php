@@ -174,7 +174,7 @@ class SupervisorController extends Controller
                     ]);
                     DB::table('time_corrections')->where('id', $req->id)->update(['attendance_id' => $newId]);
                 } elseif ($approve && ($req->kind ?? 'out') === 'in') {
-                    // forgot to tap in: set the time in; the time out is the one in the request
+                    // forgot to time in: set the time in; the time out is the one in the request
                     // (only if the day's time out has not changed since the request was sent)
                     $fixed = DB::table('attendance_records')
                         ->where('id', $req->attendance_id)

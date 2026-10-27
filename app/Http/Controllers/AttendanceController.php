@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Services\Activity;
+use App\Services\CardSecurity;
 use App\Services\Notifier;
 use App\Services\OjtHours;
 use App\Services\Supervision;
@@ -32,17 +33,44 @@ class AttendanceController extends Controller
         }
         $kiosk = $kiosk['kiosk'];   // null = main CCIS kiosk
 
-        $request->validate(['uid' => 'required|string|max:64']);
+        $request->validate([
+            'uid'    => 'required|string|max:64',
+            'card'   => 'nullable|string|max:200',            // what is written on the card (phone / ACR122U kiosks)
+            'writer' => 'nullable|string|in:webnfc,acr122u',  // this kiosk can write the next one-time code
+            'offline_at' => 'nullable|date',                  // a tap the kiosk saved while it was offline
+        ]);
 
         $uid   = strtoupper(trim($request->uid));
         $today = Carbon::today('Asia/Manila')->toDateString();
         $now   = Carbon::now('Asia/Manila');
 
-        $card = DB::table('nfc_cards')->where('uid', $uid)->first();
-        if (!$card) {
-            return response()->json([
-                'message' => "Card UID [{$uid}] is not registered.",
-            ], 404);
+        // ── a tap saved on the kiosk while the internet was down: it counts at the time it really happened ──
+        $offline = null;
+        if ($request->filled('offline_at')) {
+            $offline = Carbon::parse($request->input('offline_at'))->setTimezone('Asia/Manila');
+            $maxAge  = (int) config('ojt.offline_tap_max_hours', 72);
+            if ($offline->greaterThan($now->copy()->addMinutes(2)) || $offline->lessThan($now->copy()->subHours($maxAge))) {
+                return response()->json([
+                    'code'    => 'OFFLINE_TOO_OLD',
+                    'message' => "This saved tap is older than {$maxAge} hours (or has a wrong time), so it was not recorded. Ask the coordinator to add it.",
+                ], 422);
+            }
+            $now   = $offline;
+            $today = $offline->toDateString();
+            // the card can't be re-written later, so a saved tap is checked by its UID only
+            $request->merge(['writer' => null, 'card' => null, 'offline_sync' => true]);
+        }
+
+        // find the card (any UID format) and check its one-time code: a copied card is refused and flagged
+        $checked = CardSecurity::check($request, $uid, $kiosk);
+        if (!$checked['ok']) {
+            return response()->json($checked['body'], $checked['status']);
+        }
+        $card = $checked['card'];
+        $uid  = strtoupper((string) $card->uid);   // keep the UID as it was registered
+        if ($offline) {
+            Activity::record(DB::table('users')->where('id', $card->user_id)->first(), 'Offline tap sent',
+                'Saved on kiosk ' . ($kiosk->name ?? 'CCIS (main)') . ' at ' . $offline->format('M j, g:i A') . ', sent when it was back online.', $request);
         }
 
         $intern = DB::table('users')->where('id', $card->user_id)->first();
@@ -90,9 +118,9 @@ class AttendanceController extends Controller
                 if (!$last || $ts > $last[0]) $last = [$ts, $act];
             }
         }
-        if ($last && $now->getTimestamp() - $last[0] < $cooldown * 60) {
+        if ($last && abs($now->getTimestamp() - $last[0]) < $cooldown * 60) {
             $at   = Carbon::createFromTimestamp($last[0], 'Asia/Manila');
-            $what = $last[1] === 'CHECK_IN' ? 'checked in' : 'checked out';
+            $what = $last[1] === 'CHECK_IN' ? 'timed in' : 'timed out';
             return response()->json([
                 'code'    => 'DUPLICATE_TAP',
                 'name'    => $intern->name ?? null,
@@ -123,16 +151,16 @@ class AttendanceController extends Controller
                 $event = DB::table('calendar_events')->whereDate('date', $today)->first();
                 if ($event) {
                     $kind    = $event->type === 'holiday' ? 'a holiday' : 'a non-working day';
-                    $blocked = "Today is {$kind} ({$event->title}). Check-ins are closed.";
+                    $blocked = "Today is {$kind} ({$event->title}). Time-ins are closed.";
                 }
             }
             if (!$blocked && config('ojt.block_weekends', false) && $now->isWeekend()) {
-                $blocked = 'Check-ins are closed on ' . $now->format('l') . 's.';
+                $blocked = 'Time-ins are closed on ' . $now->format('l') . 's.';
             }
             if (!$blocked && $window && ($hourNow < $window['from'] || $hourNow >= $window['to'])) {
                 $from = $now->copy()->startOfDay()->addHours($window['from'])->format('g:i A');
                 $to   = $now->copy()->startOfDay()->addHours($window['to'])->format('g:i A');
-                $blocked = "Check-ins are only open from {$from} to {$to}.";
+                $blocked = "Time-ins are only open from {$from} to {$to}.";
             }
 
             if ($blocked) {
@@ -150,7 +178,7 @@ class AttendanceController extends Controller
             return response()->json([
                 'message' => $mode === 'four'
                     ? 'You already completed your AM and PM time logs today.'
-                    : 'You already checked out today.',
+                    : 'You already timed out today.',
             ], 409);
         }
 
@@ -190,7 +218,7 @@ class AttendanceController extends Controller
             $startAt = $at($start);
             if ($now->greaterThan($startAt)) {
                 $late = (int) floor(($now->getTimestamp() - $startAt->getTimestamp()) / 60);
-                if ($late > 0) $note = "Late by {$late} min (official time in is " . $startAt->format('g:i A') . ').';
+                if ($late > 0) $note = "Late by {$late} min (official start time is " . $startAt->format('g:i A') . ').';
             } elseif ($now->lessThan($startAt)) {
                 $note = 'Early arrival: your hours start counting at ' . $startAt->format('g:i A') . '.';
             }
@@ -233,7 +261,20 @@ class AttendanceController extends Controller
             'time'   => $now->format('h:i:s A'),
             'date'   => $today,
             'note'   => $note,                    // late / early arrival / overtime message
+            // phone / ACR122U kiosks: the next one-time code to write on the card, then POST /tap/confirm
+            'card_write' => CardSecurity::nextToken($request, $card),
+            'secured'    => $checked['secured'],
         ]);
+    }
+
+    // ── the kiosk wrote the new one-time code on the card ──
+    public function confirmCardWrite(Request $request)
+    {
+        $kiosk = AccountController::kioskFor((string) $request->header('X-Kiosk-Key'));
+        if (!$kiosk['ok']) return response()->json(['message' => 'This device is not an authorized attendance kiosk.'], 401);
+        $request->validate(['card' => 'required|string|max:200']);
+        $ok = CardSecurity::confirm($request->input('card'));
+        return response()->json(['ok' => $ok], $ok ? 200 : 409);
     }
 
     // ── Today's Records ───────────────────────────────────

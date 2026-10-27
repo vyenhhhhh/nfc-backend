@@ -30,6 +30,39 @@ return [
     // A second tap within this many minutes is treated as an accidental duplicate
     'tap_cooldown_minutes' => 5,
 
+    // One-time card codes against copied cards (app/Services/CardSecurity.php). SECURE_CARDS in .env:
+    //   off    = UID only, like before
+    //   on     = phone (Web NFC) and ACR122U kiosks check the code and write a new one on every tap;
+    //            kiosks with the old USB reader still work with the UID only (while you switch readers)
+    //   strict = every tap needs a good code (old USB-reader kiosks are refused)
+    'secure_cards' => env('SECURE_CARDS', 'on'),
+
+    // A kiosk that loses the internet keeps the taps and sends them when it is back online.
+    // Taps older than this are refused (the coordinator adds them by hand).
+    'offline_tap_max_hours' => 72,
+
+    // Quarterly report: a placement whose name has one of these words counts as "within the university"
+    // (the coordinator can still change it per office in the report)
+    'university_keywords' => ['CSU', 'Caraga State University'],
+
+    // Intern evaluation by the HTE supervisor (rated 1-5). Change the items to match the
+    // official evaluation form; "key" must stay the same once evaluations are saved.
+    'evaluation_criteria' => [
+        ['key' => 'attendance',    'label' => 'Attendance and punctuality',       'hint' => 'Comes on time, rarely absent, tells the office ahead'],
+        ['key' => 'quality',       'label' => 'Quality of work',                  'hint' => 'Accurate, neat and complete work'],
+        ['key' => 'quantity',      'label' => 'Quantity of work',                 'hint' => 'Finishes the expected amount of work on time'],
+        ['key' => 'knowledge',     'label' => 'Job knowledge and skills',         'hint' => 'Applies what was learned in school; learns new tools quickly'],
+        ['key' => 'initiative',    'label' => 'Initiative and resourcefulness',   'hint' => 'Starts tasks without being told; finds solutions'],
+        ['key' => 'dependability', 'label' => 'Dependability',                    'hint' => 'Can be trusted with tasks and follows through'],
+        ['key' => 'teamwork',      'label' => 'Cooperation and teamwork',         'hint' => 'Works well with co-workers and supervisors'],
+        ['key' => 'communication', 'label' => 'Communication skills',             'hint' => 'Clear in speaking and writing; asks when unsure'],
+        ['key' => 'attitude',      'label' => 'Attitude and professionalism',     'hint' => 'Respectful, follows office rules, proper grooming'],
+        ['key' => 'ethics',        'label' => 'Work ethics and confidentiality',  'hint' => 'Honest; keeps office information private'],
+    ],
+    'evaluation_scale' => [
+        5 => 'Outstanding', 4 => 'Very satisfactory', 3 => 'Satisfactory', 2 => 'Fair', 1 => 'Needs improvement',
+    ],
+
     // Secret shared by the kiosk and the server. /tap refuses any device without it.
     // Set KIOSK_KEY in the Laravel .env and VITE_KIOSK_KEY (same value) in the React .env.
     'kiosk_key' => env('KIOSK_KEY', ''),

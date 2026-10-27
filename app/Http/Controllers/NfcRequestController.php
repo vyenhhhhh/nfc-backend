@@ -232,6 +232,8 @@ class NfcRequestController extends Controller
             // the kiosk recognises cards from nfc_cards (a replacement card replaces the old one)
             if (DB::table('nfc_cards')->where('user_id', $req->user_id)->exists()) {
                 DB::table('nfc_cards')->where('user_id', $req->user_id)->update(['uid' => $req->uid]);
+                // a replacement card: the old card's one-time code stops working (it is flagged if used)
+                \App\Services\CardSecurity::reset((int) DB::table('nfc_cards')->where('user_id', $req->user_id)->value('id'), true);
             } else {
                 DB::table('nfc_cards')->insert(['user_id' => $req->user_id, 'uid' => $req->uid, 'created_at' => $now]);
             }

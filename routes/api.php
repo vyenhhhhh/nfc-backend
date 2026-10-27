@@ -20,6 +20,10 @@ use App\Http\Controllers\RequirementController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\AnnouncementHistoryController;
 use App\Http\Controllers\AccountController;
+use App\Http\Controllers\CardSecurityController;
+use App\Http\Controllers\BackupController;
+use App\Http\Controllers\QuarterlyReportController;
+use App\Http\Controllers\EvaluationController;
 use App\Http\Controllers\ImportController;
 use App\Http\Middleware\LogActivity;
 
@@ -35,7 +39,10 @@ Route::middleware(LogActivity::class)->group(function () use ($anyUser, $staff, 
 /* ───────── Public (no sign-in needed) ───────── */
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:20,1');
 Route::post('/login/google', [AuthController::class, 'googleLogin'])->middleware('throttle:20,1');
-Route::post('/tap',   [AttendanceController::class, 'tap']);                  // NFC kiosk
+// NFC kiosk. Rate limit: 240 taps a minute per address is far above a real queue of interns,
+// but stops anyone from flooding the kiosk route (saved offline taps are sent one by one).
+Route::post('/tap',   [AttendanceController::class, 'tap'])->middleware('throttle:240,1');
+Route::post('/tap/confirm', [AttendanceController::class, 'confirmCardWrite'])->middleware('throttle:240,1');   // phone / ACR122U kiosk wrote the new card code
 Route::get('/kiosk/info', [AccountController::class, 'kioskInfo'])->middleware('throttle:30,1');   // kiosk screen: its name + who can tap
 
 Route::post('/recovery/verify',    [RecoveryController::class, 'verify'])->middleware('throttle:6,1');
@@ -44,6 +51,7 @@ Route::post('/recovery/send-code', [RecoveryController::class, 'sendCode'])->mid
 
 /* ───────── Any signed-in user (interns only get their own data) ───────── */
 Route::middleware($anyUser)->group(function () {
+    Route::get('/my-evaluation', [EvaluationController::class, 'mine']);   // intern: was the evaluation submitted?
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me',      [AuthController::class, 'me']);
 
@@ -102,6 +110,12 @@ Route::middleware($anyUser)->group(function () {
 
 /* ───────── Admin, OJT coordinator, supervisor ───────── */
 Route::middleware($staff)->group(function () {
+    // intern evaluation by the HTE supervisor: filled in the system, or the signed paper form uploaded
+    Route::get('/evaluations/criteria', [EvaluationController::class, 'criteria']);
+    Route::get('/evaluations',          [EvaluationController::class, 'index']);
+    Route::post('/evaluations',         [EvaluationController::class, 'store']);
+    Route::delete('/evaluations/{id}',  [EvaluationController::class, 'destroy']);
+
     Route::get('/today',                [AttendanceController::class, 'today']);
     Route::get('/admin/all-attendance', [AttendanceController::class, 'allAttendance']);
     Route::get('/admin/users',          [AttendanceController::class, 'allUsers']);
@@ -139,6 +153,14 @@ Route::middleware(ApiTokenAuth::class . ':supervisor')->group(function () {
 
 /* ───────── Admin + OJT coordinator: reviews and final decisions ───────── */
 Route::middleware($coordinator)->group(function () {
+    // quarterly report (Unit Performance Review Report)
+    Route::get('/coordinator/quarterly-report', [QuarterlyReportController::class, 'show']);
+    Route::put('/coordinator/quarterly-report', [QuarterlyReportController::class, 'save']);
+
+    // copied / tampered card alerts (one-time card codes): the admin and the OJT coordinators
+    Route::get('/card-flags',               [CardSecurityController::class, 'index']);
+    Route::post('/card-flags/{id}/resolve', [CardSecurityController::class, 'resolve']);
+
     // assign an intern's HTE supervisor (from the OJT coordinator: this is her job)
     Route::patch('/coordinator/interns/{id}/supervisor', [AttendanceController::class, 'assignSupervisor']);
 
@@ -203,6 +225,7 @@ Route::middleware($adminOnly)->group(function () {
     Route::post('/admin/users/import',         [ImportController::class, 'import']);
 
     // graduated / inactive accounts: no sign-in and no taps, records stay
+    Route::patch('/admin/users/active-batch', [AccountController::class, 'setActiveBatch']);   // end of term (before {id})
     Route::patch('/admin/users/{id}/active', [AccountController::class, 'setActive']);
 
     // kiosks: each has its own key; an HTE kiosk only accepts that HTE's interns
@@ -213,6 +236,12 @@ Route::middleware($adminOnly)->group(function () {
 
     // activity log
     Route::get('/admin/activity', [AccountController::class, 'activity']);
+
+    // database backups (also: php artisan mytrack:backup)
+    Route::get('/admin/backups',         [BackupController::class, 'index']);
+    Route::post('/admin/backups',        [BackupController::class, 'store']);
+    Route::get('/admin/backups/{name}',  [BackupController::class, 'download']);
+
 
     // ID card settings (valid date, coordinator, signature, office contact): saved for every computer
     Route::get('/admin/settings/id-card', [AccountController::class, 'idCardSettings']);

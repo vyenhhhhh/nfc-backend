@@ -50,6 +50,33 @@ class AccountController extends Controller
         return response()->json(['message' => "{$user->name} was deactivated. Their records are kept."]);
     }
 
+    // PATCH /api/admin/users/active-batch   { ids: [..], active: true|false }   (End of term: a whole batch at once)
+    public function setActiveBatch(Request $request)
+    {
+        $data = $request->validate(['ids' => 'required|array|min:1|max:1000', 'ids.*' => 'integer', 'active' => 'required|boolean']);
+        if (!Schema::hasColumn('users', 'deactivated_at')) {
+            return response()->json(['message' => 'Run "php artisan migrate" on the server first.'], 500);
+        }
+        $auth = $this->auth($request);
+        // interns only: staff accounts are deactivated one by one in Manage Accounts
+        $ids = DB::table('users')->whereIn('id', $data['ids'])->where('role', 'intern')
+            ->where('id', '!=', $auth->id ?? 0)->pluck('id')->all();
+        if (!$ids) return response()->json(['message' => 'No intern accounts were selected.'], 422);
+
+        $now = Carbon::now('Asia/Manila');
+        DB::table('users')->whereIn('id', $ids)->update(['deactivated_at' => $data['active'] ? null : $now, 'updated_at' => $now]);
+        if (!$data['active'] && Schema::hasTable('api_tokens')) {
+            DB::table('api_tokens')->whereIn('user_id', $ids)->delete();   // signed out everywhere right away
+        }
+        Activity::record($auth, $data['active'] ? 'Interns reactivated (batch)' : 'Interns deactivated (end of term)',
+            count($ids) . ' intern account(s): ' . implode(', ', $ids), $request);
+
+        $n = count($ids);
+        return response()->json(['message' => $data['active']
+            ? "{$n} intern account" . ($n > 1 ? 's' : '') . ' can sign in again.'
+            : "{$n} intern account" . ($n > 1 ? 's were' : ' was') . ' deactivated. Their records are kept.']);
+    }
+
     /* ───────────── Kiosks ───────────── */
 
     private static function newKey(): string
