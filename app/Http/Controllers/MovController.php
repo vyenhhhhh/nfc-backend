@@ -233,7 +233,7 @@ class MovController extends Controller
         elseif (preg_match('/BSIS|INFORMATION\s+SYS/', $p)) $key = 'BSIS';
         elseif (preg_match('/BSCS|COMPUTER\s+SCI/', $p)) $key = 'BSCS';
 
-        return (float) (config('ojt.program_hours')[$key] ?? config('ojt.default_hours', 460));
+        return (float) (config('ojt.program_hours')[$key] ?? config('ojt.default_hours', 486));
     }
 
     // Same rule as the dashboard (see app/Services/OjtHours.php)

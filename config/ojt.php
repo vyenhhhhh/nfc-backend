@@ -5,11 +5,11 @@
 return [
     // Required OJT hours per program
     'program_hours' => [
-        'BSIT' => 460,
-        'BSIS' => 460,
+        'BSIT' => 486,
+        'BSIS' => 486,
         'BSCS' => 320,
     ],
-    'default_hours' => 460,   // when an intern has no program set
+    'default_hours' => 486,   // when an intern has no program set
 
     // Official hours (24-hour clock). No grace period: a tap after 8:00 is late.
     // Arriving early is allowed, but hours only count from 8:00 (and from 1:00 for the PM half).

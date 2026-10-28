@@ -29,10 +29,15 @@ class QuarterlyReportController extends Controller
 
         // interns who had attendance (a tap or an approved online day) in the quarter
         $ids = DB::table('attendance_records')->whereBetween('date', [$from, $to])->distinct()->pluck('user_id');
+        $hasMode = Schema::hasColumn('users', 'work_mode');
+        $cols = $hasMode ? ['id', 'name', 'program', 'placement', 'work_mode'] : ['id', 'name', 'program', 'placement'];
+        $row = fn ($u) => ['id' => (int) $u->id, 'name' => $u->name, 'program' => $u->program, 'placement' => $u->placement,
+            'work_mode' => $u->work_mode ?? null];
         $interns = DB::table('users')->whereIn('id', $ids)->where('role', 'intern')
-            ->orderBy('name')->get(['id', 'name', 'program', 'placement'])
-            ->map(fn ($u) => ['id' => (int) $u->id, 'name' => $u->name, 'program' => $u->program, 'placement' => $u->placement])
-            ->values();
+            ->orderBy('name')->get($cols)->map($row)->values();
+        // every intern account (for "enrolled" in Table 1)
+        $enrolled = DB::table('users')->where('role', 'intern')->get(['id', 'program'])
+            ->map(fn ($u) => ['id' => (int) $u->id, 'program' => $u->program])->values();
 
         $saved = Schema::hasTable('quarterly_reports')
             ? DB::table('quarterly_reports')->where('year', $data['year'])->where('quarter', $data['quarter'])->first()
@@ -42,6 +47,8 @@ class QuarterlyReportController extends Controller
             'ready'      => Schema::hasTable('quarterly_reports'),
             'period'     => ['from' => $from, 'to' => $to],
             'interns'    => $interns,
+            'enrolled'   => $enrolled,
+            'program_hours' => config('ojt.program_hours', []),
             // offices whose name says they are inside the university (the coordinator can change this)
             'university_words' => config('ojt.university_keywords', ['CSU', 'Caraga State University']),
             'data'       => $saved && $saved->data ? json_decode($saved->data, true) : null,

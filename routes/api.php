@@ -51,6 +51,8 @@ Route::post('/recovery/send-code', [RecoveryController::class, 'sendCode'])->mid
 
 /* ───────── Any signed-in user (interns only get their own data) ───────── */
 Route::middleware($anyUser)->group(function () {
+    // ID card design settings (valid date, coordinator, signature), read-only: the intern's card preview
+    Route::get('/id-card-settings', [AccountController::class, 'idCardSettings']);
     Route::get('/my-evaluation', [EvaluationController::class, 'mine']);   // intern: was the evaluation submitted?
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me',      [AuthController::class, 'me']);
@@ -149,6 +151,10 @@ Route::middleware(ApiTokenAuth::class . ':supervisor')->group(function () {
     Route::post('/supervisor/work-mode-requests/{id}/review', [WorkModeController::class, 'review']);
     Route::post('/supervisor/dtr-certifications',           [SupervisorController::class, 'certify']);
     Route::delete('/supervisor/dtr-certifications/{id}',    [SupervisorController::class, 'uncertify']);
+    // HTE days off: only for this supervisor's interns (the OJT coordinator is notified)
+    Route::post('/supervisor/calendar',        [CalendarController::class, 'storeHte']);
+    Route::put('/supervisor/calendar/{id}',    [CalendarController::class, 'updateHte']);
+    Route::delete('/supervisor/calendar/{id}', [CalendarController::class, 'destroyHte']);
 });
 
 /* ───────── Admin + OJT coordinator: reviews and final decisions ───────── */
@@ -232,6 +238,7 @@ Route::middleware($adminOnly)->group(function () {
     Route::get('/admin/kiosks',         [AccountController::class, 'kiosks']);
     Route::post('/admin/kiosks',        [AccountController::class, 'addKiosk']);
     Route::patch('/admin/kiosks/{id}',  [AccountController::class, 'updateKiosk']);
+    Route::get('/admin/kiosks/{id}/key', [AccountController::class, 'kioskKey']);
     Route::delete('/admin/kiosks/{id}', [AccountController::class, 'removeKiosk']);
 
     // activity log

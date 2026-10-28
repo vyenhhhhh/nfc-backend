@@ -148,7 +148,7 @@ class AttendanceController extends Controller
             }
 
             if (!$blocked && config('ojt.block_holidays', false)) {
-                $event = DB::table('calendar_events')->whereDate('date', $today)->first();
+                $event = \App\Services\CalendarDays::eventFor($today, $card->user_id);   // everyone's days off + this intern's HTE days off
                 if ($event) {
                     $kind    = $event->type === 'holiday' ? 'a holiday' : 'a non-working day';
                     $blocked = "Today is {$kind} ({$event->title}). Time-ins are closed.";

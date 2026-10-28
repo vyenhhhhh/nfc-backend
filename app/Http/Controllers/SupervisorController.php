@@ -260,7 +260,8 @@ class SupervisorController extends Controller
             DB::table('online_submissions as os')
                 ->join('users as u', 'u.id', '=', 'os.user_id')
                 ->whereIn('os.user_id', $scope)
-                ->select('os.id', 'os.user_id', 'os.date', 'os.description', 'os.status', 'os.endorse_remarks', 'os.endorsed_at',
+                ->select('os.id', 'os.user_id', 'os.date', 'os.description', 'os.status', 'os.endorse_remarks', 'os.endorsed_at', 'os.endorsed_by', 'os.created_at as submitted_at',
+                    DB::raw("CASE WHEN os.status = 'rejected' AND EXISTS (SELECT 1 FROM validation_logs vl WHERE vl.submission_id = os.id AND vl.supervisor_id = os.endorsed_by) THEN 'supervisor' WHEN os.status = 'rejected' THEN 'coordinator' END as rejected_by"),
                     'u.name as intern_name', 'u.email as intern_email', 'u.photo as intern_photo')
                 ->orderByRaw("CASE os.status WHEN 'pending' THEN 0 WHEN 'endorsed' THEN 1 ELSE 2 END")
                 ->orderByDesc('os.date')

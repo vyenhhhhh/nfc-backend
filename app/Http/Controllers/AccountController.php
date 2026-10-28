@@ -89,6 +89,7 @@ class AccountController extends Controller
         return [
             'id' => (int) $k->id, 'name' => $k->name, 'placement' => $k->placement,
             'active' => (bool) $k->active, 'last_seen_at' => $k->last_seen_at, 'created_at' => $k->created_at,
+            'has_key' => !empty($k->key_enc ?? null),   // its setup link can be shown again
         ];
     }
 
@@ -113,9 +114,10 @@ class AccountController extends Controller
         $id  = DB::table('kiosks')->insertGetId([
             'name' => trim($data['name']), 'placement' => ($p = trim((string) ($data['placement'] ?? ''))) === '' ? null : $p,
             'key_hash' => hash('sha256', $key), 'active' => true,
+        ] + self::encKey($key) + [
             'created_by' => $this->auth($request)->id ?? null, 'created_at' => $now, 'updated_at' => $now,
         ]);
-        return response()->json(['message' => 'Kiosk added. Copy its key now: it is shown only once.', 'id' => $id, 'key' => $key]);
+        return response()->json(['message' => 'Kiosk added. Open its setup link on the kiosk device.', 'id' => $id, 'key' => $key]);
     }
 
     // PATCH /api/admin/kiosks/{id}   { active?, name?, placement?, new_key? }
@@ -135,12 +137,34 @@ class AccountController extends Controller
         if (!empty($data['name'])) $upd['name'] = trim($data['name']);
         if ($request->has('placement')) $upd['placement'] = ($p = trim((string) $data['placement'])) === '' ? null : $p;
         $key = null;
-        if (!empty($data['new_key'])) { $key = self::newKey(); $upd['key_hash'] = hash('sha256', $key); }
+        if (!empty($data['new_key'])) { $key = self::newKey(); $upd['key_hash'] = hash('sha256', $key); $upd += self::encKey($key); }
         DB::table('kiosks')->where('id', $id)->update($upd);
 
         return response()->json($key
             ? ['message' => 'New key made. The old key stops working now; set the new one on the kiosk.', 'key' => $key]
             : ['message' => 'Kiosk updated.']);
+    }
+
+    // the key, encrypted with APP_KEY, so the admin can see the setup link again (only if the column exists)
+    private static function encKey(string $key): array
+    {
+        return Schema::hasColumn('kiosks', 'key_enc') ? ['key_enc' => \Illuminate\Support\Facades\Crypt::encryptString($key)] : [];
+    }
+
+    // GET /api/admin/kiosks/{id}/key  -> the kiosk's current key (to show its setup link again)
+    public function kioskKey($id)
+    {
+        $k = DB::table('kiosks')->where('id', $id)->first();
+        if (!$k) return response()->json(['message' => 'Kiosk not found.'], 404);
+        if (empty($k->key_enc)) {
+            return response()->json(['message' => 'This kiosk was added before keys could be shown again. Click "New key" once; after that you can always see its link.'], 409);
+        }
+        try {
+            $key = \Illuminate\Support\Facades\Crypt::decryptString($k->key_enc);
+        } catch (\Throwable $e) {
+            return response()->json(['message' => 'The saved key could not be read (the server key changed). Click "New key".'], 409);
+        }
+        return response()->json(['key' => $key]);
     }
 
     // DELETE /api/admin/kiosks/{id}

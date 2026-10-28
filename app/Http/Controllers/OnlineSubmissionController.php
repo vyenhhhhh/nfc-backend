@@ -56,7 +56,7 @@ class OnlineSubmissionController extends Controller
             return response()->json(['message' => 'Online attendance is not accepted on ' . $date->format('l') . 's.'], 422);
         }
         if (config('ojt.block_holidays', false)) {
-            $event = DB::table('calendar_events')->whereDate('date', $date->toDateString())->first();
+            $event = \App\Services\CalendarDays::eventFor($date->toDateString(), $request->user_id);
             if ($event) {
                 return response()->json(['message' => "That date is a holiday / non-working day ({$event->title})."], 422);
             }
@@ -165,10 +165,13 @@ class OnlineSubmissionController extends Controller
     {
         $rows = DB::table('online_submissions as os')
             ->join('users as u', 'u.id', '=', 'os.user_id')
+            ->leftJoin('users as e', 'e.id', '=', 'os.endorsed_by')
             ->whereIn('os.status', ['approved', 'rejected'])
             ->orderByDesc('os.updated_at')
             ->select(
-                'os.id', 'os.user_id', 'os.date', 'os.description', 'os.status',
+                'os.id', 'os.user_id', 'os.date', 'os.description', 'os.status', 'os.endorsed_by', 'os.endorse_remarks',
+                'os.created_at as submitted_at', 'e.name as endorser_name',
+                DB::raw("CASE WHEN os.status = 'rejected' AND EXISTS (SELECT 1 FROM validation_logs vl2 WHERE vl2.submission_id = os.id AND vl2.supervisor_id = os.endorsed_by) THEN 'supervisor' WHEN os.status = 'rejected' THEN 'coordinator' END as rejected_by"),
                 'u.name as intern_name', 'u.email as intern_email', 'u.photo as intern_photo',
                 DB::raw('(SELECT vl.remarks FROM validation_logs vl
                           WHERE vl.submission_id = os.id ORDER BY vl.created_at DESC LIMIT 1) as remarks'),
