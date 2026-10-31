@@ -60,7 +60,11 @@ class CalendarController extends Controller
                 if ($hte) $w->orWhere('c.hte_key', $hte);
             });
         }
-        // admin / coordinator without ?for: every HTE's days too
+        // admin / coordinator without ?for: the university calendar only. An HTE's own days (supervisor's days off
+        // and "We're open") are shown only to that HTE's supervisor and interns.
+        else {
+            $q->whereNull('c.hte_key');
+        }
 
         $events = CalendarDays::markOff($q->orderBy('c.date')->get(), $hte);
         return response()->json($events->values());
@@ -187,8 +191,6 @@ class CalendarController extends Controller
         $what = $data['type'] === 'working'
             ? 'a working day (interns time in even though the university has no OJT)'
             : ($data['type'] === 'holiday' ? 'a holiday' : 'a non-working day');
-        Notifier::toRoles(['ojt_coordinator'], "HTE calendar {$verb}",
-            "{$auth->name} ({$hteName}) marked {$this->fmt($date)} as {$what}: \"{$data['title']}\".", 'calendar');
         foreach ($this->hteUsers($hteKey, 'intern') as $iid) {
             Notifier::toUser($iid, $data['type'] === 'working' ? 'Work day at your HTE' : 'Day off at your HTE',
                 Carbon::parse($date)->format('l, M j') . ": {$data['title']}. "
@@ -219,7 +221,7 @@ class CalendarController extends Controller
         $row = $this->base($data, true, $auth) + ['hte_key' => $key, 'hte_name' => $name, 'scope' => 'no_ojt'];
         $id  = DB::table('calendar_events')->insertGetId($row);
         $this->tell($key, $name, $auth, $date, $data, 'updated');
-        return response()->json(['message' => 'Saved on your HTE calendar. Your interns and the OJT coordinator were notified.', 'id' => $id], 201);
+        return response()->json(['message' => 'Saved on your HTE calendar. Your interns were notified.', 'id' => $id], 201);
     }
 
     // PUT /api/supervisor/calendar/{id}
@@ -246,8 +248,6 @@ class CalendarController extends Controller
         if (!$ev) return response()->json(['message' => 'You can only remove your HTE\'s own days.'], 403);
         DB::table('calendar_events')->where('id', $id)->delete();
         $auth = $this->auth($request);
-        Notifier::toRoles(['ojt_coordinator'], 'HTE calendar updated',
-            "{$auth->name} ({$name}) removed \"{$ev->title}\" ({$this->fmt($ev->date)}) from their HTE calendar.", 'calendar');
         return response()->json(['message' => 'Removed.']);
     }
 }

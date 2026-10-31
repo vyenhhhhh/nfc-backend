@@ -37,7 +37,7 @@ class MovController extends Controller
         // Post-internship documents open only after the required hours are done
         if ($phase === 'post') {
             $u = DB::table('users')->where('id', $request->user_id)->first();
-            if (($u->tracking_type ?? 'hours') !== 'output') {
+            if ($u) {   // every intern renders the required hours of their program
                 $required = $this->requiredHours($u->program ?? null);
                 $rendered = $this->renderedHours((int) $request->user_id);
                 if ($rendered + 0.0001 < $required) {

@@ -122,6 +122,8 @@ class AuthController extends Controller
             'photo'         => $user->photo ?? null,
             'work_mode'     => $user->work_mode ?? 'onsite',
             'tracking_type' => $user->tracking_type ?? 'hours',
+            'modality'      => $user->modality ?? 'onsite',
+            'scope'         => $user->scope ?? 'local',
             'dtr_mode'      => $user->dtr_mode ?? 'two',
             'has_card'      => $hasCard,
             'must_change_password' => (bool) ($user->must_change_password ?? false),

@@ -30,7 +30,7 @@ class OnlineSubmissionController extends Controller
         if (config('ojt.online_requires_wfh', false)
             && DB::table('users')->where('id', $request->user_id)->value('work_mode') !== 'offsite') {
             return response()->json([
-                'message' => 'Online attendance is for approved work-from-home only. Request WFH first (with the letter from your HTE).',
+                'message' => 'Online attendance is only for interns whose HTE set them as virtual or hybrid. Ask your OJT coordinator.',
             ], 403);
         }
 

@@ -15,7 +15,6 @@ use App\Http\Controllers\TimeCorrectionController;
 use App\Http\Middleware\ApiTokenAuth;
 use App\Http\Controllers\LiveController;
 use App\Http\Controllers\SupervisorController;
-use App\Http\Controllers\WorkModeController;
 use App\Http\Controllers\RequirementController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\AnnouncementHistoryController;
@@ -24,8 +23,10 @@ use App\Http\Controllers\CardSecurityController;
 use App\Http\Controllers\BackupController;
 use App\Http\Controllers\QuarterlyReportController;
 use App\Http\Controllers\EvaluationController;
+use App\Http\Controllers\GradeController;
 use App\Http\Controllers\ImportController;
 use App\Http\Middleware\LogActivity;
+use App\Http\Controllers\SchoolEventController;
 
 // Who may call what (see app/Http/Middleware/ApiTokenAuth.php)
 $anyUser     = ApiTokenAuth::class;                                          // any signed-in user
@@ -54,6 +55,7 @@ Route::middleware($anyUser)->group(function () {
     // ID card design settings (valid date, coordinator, signature), read-only: the intern's card preview
     Route::get('/id-card-settings', [AccountController::class, 'idCardSettings']);
     Route::get('/my-evaluation', [EvaluationController::class, 'mine']);   // intern: was the evaluation submitted?
+    Route::get('/my-grade', [GradeController::class, 'mine']);             // intern: the internship grade, once released
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me',      [AuthController::class, 'me']);
 
@@ -86,13 +88,14 @@ Route::middleware($anyUser)->group(function () {
     Route::get('/intern/time-corrections',  [TimeCorrectionController::class, 'mine']);
     Route::post('/intern/time-corrections', [TimeCorrectionController::class, 'store']);
 
+    Route::get('/intern/school-events',         [SchoolEventController::class, 'mine']);
+    Route::post('/intern/school-events',        [SchoolEventController::class, 'store']);
+    Route::delete('/intern/school-events/{id}', [SchoolEventController::class, 'destroy']);
+    Route::get('/excused-days',                 [SchoolEventController::class, 'excused']);   // approved school-event days (DTR)
+    
     // DTR certification status (interns see only their own)
     Route::get('/dtr-certifications', [SupervisorController::class, 'certifications']);
 
-    // work arrangement (WFH) requests
-    Route::get('/intern/work-mode-requests',         [WorkModeController::class, 'mine']);
-    Route::post('/intern/work-mode-requests',        [WorkModeController::class, 'store']);
-    Route::delete('/intern/work-mode-requests/{id}', [WorkModeController::class, 'destroy']);
 
     // requirement due dates (everyone can read them)
     Route::get('/requirement-deadlines', [RequirementController::class, 'index']);
@@ -118,6 +121,10 @@ Route::middleware($staff)->group(function () {
     Route::post('/evaluations',         [EvaluationController::class, 'store']);
     Route::delete('/evaluations/{id}',  [EvaluationController::class, 'destroy']);
 
+    // the internship grade: supervisor appraisal (60%) + coordinator evaluation (40%)
+    Route::get('/grades/criteria', [GradeController::class, 'criteria']);
+    Route::get('/grades',          [GradeController::class, 'index']);
+
     Route::get('/today',                [AttendanceController::class, 'today']);
     Route::get('/admin/all-attendance', [AttendanceController::class, 'allAttendance']);
     Route::get('/admin/users',          [AttendanceController::class, 'allUsers']);
@@ -136,6 +143,9 @@ Route::middleware($staff)->group(function () {
     Route::get('/announcements/history',          [AnnouncementHistoryController::class, 'index']);
     Route::delete('/announcements/history/{id}',  [AnnouncementHistoryController::class, 'destroy']);
     Route::delete('/announcements/{id}',          [AnnouncementHistoryController::class, 'remove']);
+
+    Route::get('/supervisor/school-events',              [SchoolEventController::class, 'index']);
+    Route::post('/supervisor/school-events/{id}/review', [SchoolEventController::class, 'review']);
 });
 
 /* ───────── HTE supervisor: first review of their own interns + DTR certification ───────── */
@@ -146,9 +156,6 @@ Route::middleware(ApiTokenAuth::class . ':supervisor')->group(function () {
     Route::post('/supervisor/overtime/{id}/review',         [SupervisorController::class, 'reviewOvertime']);
     Route::get('/supervisor/time-corrections',              [SupervisorController::class, 'corrections']);
     Route::post('/supervisor/time-corrections/{id}/review', [SupervisorController::class, 'reviewCorrection']);
-    // work arrangement (WFH / back onsite): the supervisor's decision is final
-    Route::get('/supervisor/work-mode-requests',              [WorkModeController::class, 'index']);
-    Route::post('/supervisor/work-mode-requests/{id}/review', [WorkModeController::class, 'review']);
     Route::post('/supervisor/dtr-certifications',           [SupervisorController::class, 'certify']);
     Route::delete('/supervisor/dtr-certifications/{id}',    [SupervisorController::class, 'uncertify']);
     // HTE days off: only for this supervisor's interns (the OJT coordinator is notified)
@@ -157,23 +164,37 @@ Route::middleware(ApiTokenAuth::class . ':supervisor')->group(function () {
     Route::delete('/supervisor/calendar/{id}', [CalendarController::class, 'destroyHte']);
 });
 
-/* ───────── Admin + OJT coordinator: reviews and final decisions ───────── */
-Route::middleware($coordinator)->group(function () {
-    // quarterly report (Unit Performance Review Report)
+/* ───────── OJT coordinator only: the quarterly report (Unit Performance Review Report) ───────── */
+Route::middleware(ApiTokenAuth::class . ':ojt_coordinator')->group(function () {
     Route::get('/coordinator/quarterly-report', [QuarterlyReportController::class, 'show']);
     Route::put('/coordinator/quarterly-report', [QuarterlyReportController::class, 'save']);
 
+    // the coordinator's part of the internship grade (40%), and releasing it to the intern
+    Route::put('/grades/{internId}',         [GradeController::class, 'save']);
+    Route::post('/grades/{internId}/reopen', [GradeController::class, 'reopen']);
+});
+
+/* ───────── Admin + OJT coordinator: reviews and final decisions ───────── */
+Route::middleware($coordinator)->group(function () {
     // copied / tampered card alerts (one-time card codes): the admin and the OJT coordinators
     Route::get('/card-flags',               [CardSecurityController::class, 'index']);
     Route::post('/card-flags/{id}/resolve', [CardSecurityController::class, 'resolve']);
 
     // assign an intern's HTE supervisor (from the OJT coordinator: this is her job)
     Route::patch('/coordinator/interns/{id}/supervisor', [AttendanceController::class, 'assignSupervisor']);
+    // internship modality (on-site / hybrid / virtual) and scope (local / inbound / outbound)
+    Route::patch('/coordinator/interns/{id}/placement', [AttendanceController::class, 'setPlacement']);
 
     // holidays / non-working days on the calendar (the OJT coordinator sets these; the admin can too)
     Route::post('/calendar',        [CalendarController::class, 'store']);
     Route::put('/calendar/{id}',    [CalendarController::class, 'update']);
     Route::delete('/calendar/{id}', [CalendarController::class, 'destroy']);
+
+    // add accounts: the coordinator may add interns and HTE supervisors only (AttendanceController::addUser enforces it);
+    // the admin can add any role. Import = the coordinator's Excel list of interns (check first, then create).
+    Route::post('/admin/users',                [AttendanceController::class, 'addUser']);
+    Route::post('/admin/users/import/preview', [ImportController::class, 'preview']);
+    Route::post('/admin/users/import',         [ImportController::class, 'import']);
 
     // MOV review
     Route::get('/coordinator/movs',              [MovController::class, 'index']);
@@ -193,7 +214,8 @@ Route::middleware($coordinator)->group(function () {
     Route::get('/coordinator/overtime',               [OvertimeController::class, 'index']);
     Route::post('/coordinator/overtime/{id}/review',  [OvertimeController::class, 'review']);
 
-    // (time corrections and work arrangement are reviewed by the HTE supervisor only — see the supervisor group)
+    // (time corrections are reviewed by the HTE supervisor only — see the supervisor group)
+    // (the modality is decided by the HTE; interns don't request work from home)
 
     // requirement due dates + reminders
     Route::put('/coordinator/requirement-deadlines',          [RequirementController::class, 'save']);
@@ -217,7 +239,6 @@ Route::post('/admin/users/{id}/photo', [AttendanceController::class, 'updatePhot
 
 /* ───────── Admin only ───────── */
 Route::middleware($adminOnly)->group(function () {
-    Route::post('/admin/users',          [AttendanceController::class, 'addUser']);
     Route::delete('/admin/users/{id}',   [AttendanceController::class, 'deleteUser']);
     // ID cards are printed outside MYTRACK; the admin marks them as printed here
     Route::post('/admin/nfc-requests/printed', [NfcRequestController::class, 'markPrinted']);
@@ -225,10 +246,6 @@ Route::middleware($adminOnly)->group(function () {
     Route::post('/admin/nfc-requests/{id}/claim', [NfcRequestController::class, 'claim']);   // intern picked it up: card becomes active
 
     // (calendar events moved to the admin + coordinator group: the OJT coordinator sets the calendar)
-
-    // import interns from the coordinator's Excel list (check first, then create)
-    Route::post('/admin/users/import/preview', [ImportController::class, 'preview']);
-    Route::post('/admin/users/import',         [ImportController::class, 'import']);
 
     // graduated / inactive accounts: no sign-in and no taps, records stay
     Route::patch('/admin/users/active-batch', [AccountController::class, 'setActiveBatch']);   // end of term (before {id})

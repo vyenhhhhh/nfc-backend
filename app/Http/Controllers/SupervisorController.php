@@ -14,7 +14,7 @@ use Illuminate\Support\Facades\DB;
  * respective supervisors"):
  *  - overtime of their own interns: approve (sent on to the OJT coordinator for the final decision,
  *    status "endorsed") or reject
- *  - forgotten time-outs and work arrangement (WFH / back onsite) of their own interns: the supervisor's
+ *  - forgotten time-outs of their own interns: the supervisor's
  *    decision is final (from the OJT coordinator: these are the HTE supervisor's work, not hers)
  *  - certify an intern's DTR for a period (e.g. Oct 1–15)
  */

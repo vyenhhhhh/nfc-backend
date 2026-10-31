@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Services\Activity;
+use App\Services\Grading;
 use App\Services\Notifier;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -48,6 +49,7 @@ class EvaluationController extends Controller
         return response()->json([
             'criteria' => config('ojt.evaluation_criteria', []),
             'scale'    => config('ojt.evaluation_scale', []),
+            'grading'  => config('ojt.grading', []),      // the CCIS supervisor appraisal used for the grade
         ]);
     }
 
@@ -78,6 +80,9 @@ class EvaluationController extends Controller
         ]);
         $intern = DB::table('users')->where('id', $data['intern_id'])->first();
         if (!$this->allowed($auth, $intern)) return response()->json(['message' => 'You can only evaluate your own interns.'], 403);
+        if (Schema::hasTable('intern_grades') && DB::table('intern_grades')->where('intern_id', $intern->id)->whereNotNull('finalized_at')->exists()) {
+            return response()->json(['message' => 'The OJT coordinator already released this intern\'s grade, so the appraisal can no longer be changed.'], 422);
+        }
 
         $now = Carbon::now('Asia/Manila');
         $row = [
@@ -88,14 +93,9 @@ class EvaluationController extends Controller
         ];
 
         if ($data['mode'] === 'system') {
-            $ratings = is_string($data['ratings']) ? json_decode($data['ratings'], true) : $data['ratings'];
-            $keys = array_column(config('ojt.evaluation_criteria', []), 'key');
-            $clean = [];
-            foreach ($keys as $k) {
-                $v = (int) ($ratings[$k] ?? 0);
-                if ($v < 1 || $v > 5) return response()->json(['message' => 'Please rate every item from 1 to 5.'], 422);
-                $clean[$k] = $v;
-            }
+            // the CCIS supervisor appraisal (config ojt.grading.supervisor): every item 1-5
+            $clean = Grading::clean('supervisor', $data['ratings']);
+            if (!Grading::complete('supervisor', $clean)) return response()->json(['message' => 'Please rate every item from 1 to 5.'], 422);
             $row['ratings'] = json_encode($clean);
             $row['average'] = round(array_sum($clean) / max(count($clean), 1), 2);
         } else {

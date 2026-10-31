@@ -31,7 +31,6 @@ class LogActivity
         'POST supervisor/overtime/{id}/review'          => 'Reviewed overtime',
         'POST coordinator/overtime/{id}/review'         => 'Reviewed overtime (final)',
         'POST supervisor/time-corrections/{id}/review'  => 'Reviewed a time correction',
-        'POST supervisor/work-mode-requests/{id}/review'=> 'Reviewed a work arrangement request',
         'POST supervisor/dtr-certifications'            => 'Certified a DTR',
         'DELETE supervisor/dtr-certifications/{id}'     => 'Removed a DTR certification',
         'POST supervisor/nfc-requests/{id}/review'      => 'Reviewed an ID card request',
@@ -63,8 +62,6 @@ class LogActivity
         'DELETE intern/submit-online/{id}'              => 'Removed own online attendance',
         'DELETE intern/submit-mov/{id}'                 => 'Removed own upload',
         'POST intern/time-corrections'                  => 'Asked for a time correction',
-        'POST intern/work-mode-requests'                => 'Asked for a work arrangement change',
-        'DELETE intern/work-mode-requests/{id}'         => 'Cancelled a work arrangement request',
         'POST intern/nfc-request'                       => 'Asked for an ID card',
     ];
 

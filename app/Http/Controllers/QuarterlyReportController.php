@@ -31,8 +31,9 @@ class QuarterlyReportController extends Controller
         $ids = DB::table('attendance_records')->whereBetween('date', [$from, $to])->distinct()->pluck('user_id');
         $hasMode = Schema::hasColumn('users', 'work_mode');
         $cols = $hasMode ? ['id', 'name', 'program', 'placement', 'work_mode'] : ['id', 'name', 'program', 'placement'];
+        if (Schema::hasColumn('users', 'modality')) { $cols[] = 'modality'; $cols[] = 'scope'; }
         $row = fn ($u) => ['id' => (int) $u->id, 'name' => $u->name, 'program' => $u->program, 'placement' => $u->placement,
-            'work_mode' => $u->work_mode ?? null];
+            'work_mode' => $u->work_mode ?? null, 'modality' => $u->modality ?? null, 'scope' => $u->scope ?? null];
         $interns = DB::table('users')->whereIn('id', $ids)->where('role', 'intern')
             ->orderBy('name')->get($cols)->map($row)->values();
         // every intern account (for "enrolled" in Table 1)

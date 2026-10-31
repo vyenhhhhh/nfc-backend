@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Schema;
 
 /**
- * Import interns from the coordinator's Excel list (admin only).
+ * Import interns from the coordinator's Excel list (admin and OJT coordinator).
  * The browser reads the Excel file and sends its rows here:
  *   1. preview -> every row is checked; nothing is saved
  *   2. import  -> the good rows become intern accounts; each intern gets a temporary password by email

@@ -154,7 +154,14 @@ class AttendanceController extends Controller
                     $blocked = "Today is {$kind} ({$event->title}). Time-ins are closed.";
                 }
             }
-            if (!$blocked && config('ojt.block_weekends', false) && $now->isWeekend()) {
+            // an HTE that marked this day "We're open" (even a Saturday / Sunday) lets its interns time in
+            $hteOpen = false;
+            if ($now->isWeekend() && \App\Services\CalendarDays::ready()) {
+                $hteKey  = \App\Services\CalendarDays::hteOf($card->user_id);
+                $hteOpen = $hteKey && DB::table('calendar_events')->whereDate('date', $today)
+                    ->where('hte_key', $hteKey)->where('type', 'working')->exists();
+            }
+            if (!$blocked && !$hteOpen && config('ojt.block_weekends', false) && $now->isWeekend()) {
                 $blocked = 'Time-ins are closed on ' . $now->format('l') . 's.';
             }
             if (!$blocked && $window && ($hourNow < $window['from'] || $hourNow >= $window['to'])) {
@@ -378,6 +385,8 @@ class AttendanceController extends Controller
             'uid'            => 'nullable|string|max:64|unique:nfc_cards,uid',
             'work_mode'      => 'nullable|in:onsite,offsite',
             'tracking_type'  => 'nullable|in:hours,output',
+            'modality'       => 'nullable|in:onsite,hybrid,virtual,project',
+            'scope'          => 'nullable|in:local,inbound,outbound',
             'dtr_mode'       => 'nullable|in:two,four',
             'supervisor_id'  => 'nullable|integer|exists:users,id',
             'photo'          => 'nullable|image|max:2048',
@@ -426,7 +435,7 @@ class AttendanceController extends Controller
             'password'       => Hash::make($data['password']),
             'role'           => $data['role'],
             'work_mode'      => $isIntern ? ($data['work_mode'] ?? 'onsite') : 'onsite',
-            'tracking_type'  => $isIntern ? ($data['tracking_type'] ?? 'hours') : 'hours',
+            'tracking_type'  => 'hours',   // every intern renders the required hours of their program
             'dtr_mode'       => $isIntern ? ($data['dtr_mode'] ?? 'two') : 'two',
             'supervisor_id'  => $isIntern ? ($data['supervisor_id'] ?? null) : null,
             'emergency_contact_name'     => $data['emergency_contact_name'] ?? null,
@@ -437,6 +446,14 @@ class AttendanceController extends Controller
             'created_at'     => $now,
             'updated_at'     => $now,
         ]);
+
+        // the internship modality and scope (when the columns exist: php artisan migrate)
+        if ($isIntern && Schema::hasColumn('users', 'modality')) {
+            DB::table('users')->where('id', $userId)->update([
+                'modality' => $data['modality'] ?? 'onsite',
+                'scope'    => $data['scope'] ?? 'local',
+            ]);
+        }
 
         // NFC cards are not linked here: every intern follows the same steps
         // (request → coordinator approves → intern signs → admin prints → admin links in Card Requests)
@@ -469,6 +486,8 @@ class AttendanceController extends Controller
             'placement'      => 'nullable|string|max:150',
             'work_mode'      => 'nullable|in:onsite,offsite',
             'tracking_type'  => 'nullable|in:hours,output',
+            'modality'       => 'nullable|in:onsite,hybrid,virtual,project',
+            'scope'          => 'nullable|in:local,inbound,outbound',
             'dtr_mode'       => 'nullable|in:two,four',
             'supervisor_id'  => 'nullable|integer|exists:users,id',
             'uid'            => 'nullable|string|max:64',
@@ -562,7 +581,11 @@ class AttendanceController extends Controller
             $update['placement']     = $data['placement'] ?? null;
             $update['college']       = 'CCIS';
             $update['work_mode']     = $data['work_mode'] ?? $user->work_mode;
-            $update['tracking_type'] = $data['tracking_type'] ?? $user->tracking_type;
+            $update['tracking_type'] = 'hours';   // no output-based tracking
+            if (Schema::hasColumn('users', 'modality')) {
+                $update['modality'] = $data['modality'] ?? ($user->modality ?? 'onsite');
+                $update['scope']    = $data['scope'] ?? ($user->scope ?? 'local');
+            }
             $update['dtr_mode']      = $data['dtr_mode'] ?? ($user->dtr_mode ?? 'two');
 
             // the intern's supervisor: only when the form sent it (admin or coordinator)
@@ -674,7 +697,7 @@ class AttendanceController extends Controller
     {
         $request->validate([
             'work_mode'     => 'required|in:onsite,offsite',
-            'tracking_type' => 'required|in:hours,output',
+            'tracking_type' => 'nullable|in:hours,output',   // kept for old clients; always saved as hours
         ]);
 
         $user = DB::table('users')->where('id', $id)->first();
@@ -688,10 +711,51 @@ class AttendanceController extends Controller
 
         DB::table('users')->where('id', $id)->update([
             'work_mode'     => $request->work_mode,
-            'tracking_type' => $request->tracking_type,
+            'tracking_type' => 'hours',
         ]);
 
         return response()->json(['message' => 'Intern settings updated.']);
+    }
+
+    // ── Internship modality and scope (the OJT coordinator sets these) ─────────────────
+    // PATCH /api/coordinator/interns/{id}/placement   { modality?: onsite|hybrid|virtual|project, scope?: local|inbound|outbound }
+    // scope: local = CSU student at an HTE in the Philippines · inbound = a foreign student interning at CSU ·
+    //        outbound = a CSU student interning with a foreign HTE (abroad, or virtually for a foreign company)
+    // A virtual intern has no kiosk, so their work mode becomes offsite (they log days through Submit Online);
+    // an on-site intern goes back to onsite. Hybrid keeps whatever the day-to-day work mode is.
+    public function setPlacement(Request $request, $id)
+    {
+        if (!Schema::hasColumn('users', 'modality')) {
+            return response()->json(['message' => 'Run "php artisan migrate" on the server first.'], 500);
+        }
+        $data = $request->validate([
+            'modality' => 'nullable|in:onsite,hybrid,virtual,project',
+            'scope'    => 'nullable|in:local,inbound,outbound',
+        ]);
+        $intern = DB::table('users')->where('id', $id)->where('role', 'intern')->first();
+        if (!$intern) return response()->json(['message' => 'Intern not found.'], 404);
+
+        $update = [];
+        if (!empty($data['modality'])) {
+            $update['modality'] = $data['modality'];
+            if ($data['modality'] === 'virtual') $update['work_mode'] = 'offsite';
+            if ($data['modality'] === 'onsite')  $update['work_mode'] = 'onsite';
+        }
+        if (!empty($data['scope'])) $update['scope'] = $data['scope'];
+        if (!$update) return response()->json(['message' => 'Nothing to change.'], 422);
+        DB::table('users')->where('id', $id)->update($update);
+
+        $labels = ['onsite' => 'On-site', 'hybrid' => 'Hybrid', 'virtual' => 'Virtual', 'project' => 'Project-based',
+                   'local' => 'Local', 'inbound' => 'Inbound (international)', 'outbound' => 'Outbound (international)'];
+        $auth = $request->attributes->get('auth_user');
+        try { Activity::record($auth, 'Changed internship modality / scope', $intern->name . ' → ' . implode(', ', array_map(fn ($v) => $labels[$v] ?? $v, array_intersect_key($update, ['modality' => 1, 'scope' => 1]))), $request); } catch (\Throwable $e) { /* best-effort */ }
+        if (isset($update['modality']) && $update['modality'] !== ($intern->modality ?? 'onsite')) {
+            $how = ['onsite' => 'on-site: time in and out at the kiosk.', 'hybrid' => 'hybrid: use the kiosk on office days and Submit Online on remote days.',
+                    'virtual' => 'virtual: log your days through Submit Online.',
+                    'project' => 'project-based: log the days you worked on your project through Submit Online, or tap the kiosk when you are on site.'][$update['modality']];
+            try { Notifier::toUser($intern->id, 'Internship Modality Updated', "Your internship is now {$how}", 'settings'); } catch (\Throwable $e) { /* best-effort */ }
+        }
+        return response()->json(['message' => 'Saved.', 'work_mode' => $update['work_mode'] ?? $intern->work_mode]);
     }
 
     // ── Assign (or remove) an intern's HTE supervisor ─────────────────────────────────

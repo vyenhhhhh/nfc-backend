@@ -161,8 +161,7 @@ class RequirementController extends Controller
         $postOpen = [];
         if (in_array('post', array_column($wanted, 0), true)) {
             foreach ($interns as $u) {
-                $postOpen[(int) $u->id] = ($u->tracking_type ?? 'hours') === 'output'
-                    || OjtHours::rendered((int) $u->id) + 0.0001 >= $this->requiredHours($u->program);
+                $postOpen[(int) $u->id] = OjtHours::rendered((int) $u->id) + 0.0001 >= $this->requiredHours($u->program);
             }
         }
 
@@ -225,7 +224,7 @@ class RequirementController extends Controller
             // during / post: only interns whose internship has started (all pre-internship requirements approved)
             if ($phase !== 'pre' && !isset($started[(int) $u->id])) continue;
             // post-internship requirements only open after the required hours are done
-            if ($phase === 'post' && ($u->tracking_type ?? 'hours') !== 'output'
+            if ($phase === 'post'
                 && OjtHours::rendered((int) $u->id) + 0.0001 < $this->requiredHours($u->program)) {
                 continue;
             }
