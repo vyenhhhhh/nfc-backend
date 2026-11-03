@@ -4,6 +4,7 @@ namespace App\Services;
 
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
@@ -41,7 +42,9 @@ class CardSecurity
     {
         if (self::$ready === null) {
             try {
-                self::$ready = Schema::hasColumn('nfc_cards', 'card_uuid') && Schema::hasTable('card_flags');
+                // remembered for an hour, so a tap doesn't ask the database about its own tables every time
+                self::$ready = (bool) Cache::remember('card_security_ready', 3600,
+                    fn () => Schema::hasColumn('nfc_cards', 'card_uuid') && Schema::hasTable('card_flags'));
             } catch (\Throwable $e) {
                 self::$ready = false;
             }
@@ -88,7 +91,22 @@ class CardSecurity
 
     public static function findCardByUid(string $uid): ?object
     {
-        return DB::table('nfc_cards')->whereIn(DB::raw('UPPER(uid)'), self::uidVariants($uid))->first();
+        // only cards whose account still exists (a card left behind by a deleted account is ignored)
+        return DB::table('nfc_cards as n')
+            ->join('users as u', 'u.id', '=', 'n.user_id')
+            ->whereIn(DB::raw('UPPER(n.uid)'), self::uidVariants($uid))
+            ->select('n.*')
+            ->first();
+    }
+
+    /** true when the same physical card (in any UID format) is already linked to someone other than $userId */
+    public static function uidTakenByOther(string $uid, int $userId): bool
+    {
+        return DB::table('nfc_cards as n')
+            ->join('users as u', 'u.id', '=', 'n.user_id')
+            ->whereIn(DB::raw('UPPER(n.uid)'), self::uidVariants($uid))
+            ->where('n.user_id', '!=', $userId)
+            ->exists();
     }
 
     private static function hexToDec(string $hex): string
@@ -326,7 +344,7 @@ class CardSecurity
 
     private static function unknown(string $uid): array
     {
-        return ['ok' => false, 'status' => 404, 'body' => ['message' => "Card UID [{$uid}] is not registered."]];
+        return ['ok' => false, 'status' => 404, 'body' => ['message' => 'This card is not registered yet. Please see the OJT office to link your card.']];
     }
 
     private static function refuse(int $status, string $code, ?object $card, string $message): array

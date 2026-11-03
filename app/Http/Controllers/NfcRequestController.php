@@ -185,8 +185,11 @@ class NfcRequestController extends Controller
 
         $uid = strtoupper(trim($data['uid'] ?? ''));
         if ($uid !== '') {
-            $taken = DB::table('nfc_cards')->where('uid', $uid)->where('user_id', '!=', $req->user_id)->exists()
-                || DB::table('nfc_requests')->where('uid', $uid)->where('status', 'approved')->where('id', '!=', $id)->exists();
+            // the same card can be written several ways (E2864A4A, its reverse, or the old reader's number 1246398178):
+            // any of them already linked to someone else counts as taken
+            $variants = \App\Services\CardSecurity::uidVariants($uid);
+            $taken = \App\Services\CardSecurity::uidTakenByOther($uid, (int) $req->user_id)
+                || DB::table('nfc_requests')->whereIn(DB::raw('UPPER(uid)'), $variants)->where('status', 'approved')->where('id', '!=', $id)->exists();
             if ($taken) {
                 return response()->json(['message' => 'That card is already linked to another intern.'], 422);
             }
@@ -212,7 +215,7 @@ class NfcRequestController extends Controller
         if ($req->status !== 'approved' || empty($req->printed_at) || empty($req->uid)) {
             return response()->json(['message' => 'Link the card first, then mark it as claimed.'], 422);
         }
-        $taken = DB::table('nfc_cards')->where('uid', $req->uid)->where('user_id', '!=', $req->user_id)->exists();
+        $taken = \App\Services\CardSecurity::uidTakenByOther((string) $req->uid, (int) $req->user_id);
         if ($taken) {
             return response()->json(['message' => 'That card is already linked to another intern. Link a different card.'], 422);
         }
