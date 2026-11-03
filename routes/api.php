@@ -5,6 +5,7 @@ use App\Http\Controllers\AttendanceController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\OnlineSubmissionController;
 use App\Http\Controllers\MovController;
+use App\Http\Controllers\RequirementTemplateController;
 use App\Http\Controllers\NfcRequestController;
 use App\Http\Controllers\CalendarController;
 use App\Http\Controllers\NotificationController;
@@ -33,6 +34,9 @@ $anyUser     = ApiTokenAuth::class;                                          // 
 $staff       = ApiTokenAuth::class . ':admin,ojt_coordinator,supervisor';
 $coordinator = ApiTokenAuth::class . ':admin,ojt_coordinator';
 $adminOnly   = ApiTokenAuth::class . ':admin';
+
+// "Online" = the portal is open: a ping every minute. Kept outside the activity log on purpose (it would fill it).
+Route::post('/me/ping', [AttendanceController::class, 'ping'])->middleware($anyUser)->middleware('throttle:60,1');
 
 // Every change a signed-in user makes is written to the activity log (app/Http/Middleware/LogActivity.php)
 Route::middleware(LogActivity::class)->group(function () use ($anyUser, $staff, $coordinator, $adminOnly) {
@@ -79,6 +83,7 @@ Route::middleware($anyUser)->group(function () {
     Route::post('/intern/nfc-request',   [NfcRequestController::class, 'store']);
     Route::post('/intern/submit-mov',    [MovController::class, 'submit']);
     Route::get('/intern/my-movs',        [MovController::class, 'myMovs']);
+    Route::get('/requirement-templates', [RequirementTemplateController::class, 'index']);   // blank forms to download and print
 
     // remove your own pending submission
     Route::delete('/intern/submit-online/{id}', [OnlineSubmissionController::class, 'destroy']);
@@ -196,6 +201,11 @@ Route::middleware($coordinator)->group(function () {
     Route::post('/admin/users/import/preview', [ImportController::class, 'preview']);
     Route::post('/admin/users/import',         [ImportController::class, 'import']);
 
+    // blank forms for the requirements (interns download them; the coordinator uploads them)
+    Route::post('/coordinator/requirement-templates',        [RequirementTemplateController::class, 'store']);
+    Route::delete('/coordinator/requirement-templates/{id}', [RequirementTemplateController::class, 'destroy']);
+    Route::put('/coordinator/requirement-form-notes',        [RequirementTemplateController::class, 'saveNote']);
+
     // MOV review
     Route::get('/coordinator/movs',              [MovController::class, 'index']);
     Route::post('/coordinator/movs/{id}/review', [MovController::class, 'review']);
@@ -231,11 +241,13 @@ Route::middleware($coordinator)->group(function () {
     Route::post('/coordinator/reports/{id}/remind',   [ReportController::class, 'remind']);
 });
 
-/* ───────── Edit a profile (details or photo): admin only ───────── */
+/* ───────── Edit a profile (details or photo): admin; coordinator for interns and supervisors ───────── */
 Route::patch('/admin/users/{id}',      [AttendanceController::class, 'updateUser'])
-    ->middleware($adminOnly);
+    ->middleware($coordinator)->whereNumber('id');   // numbers only, so /admin/users/active-batch reaches its own route
 Route::post('/admin/users/{id}/photo', [AttendanceController::class, 'updatePhoto'])
-    ->middleware($adminOnly);
+    ->middleware($coordinator);
+Route::post('/admin/users/{id}/signature', [AttendanceController::class, 'updateSignature'])
+    ->middleware($coordinator);
 
 /* ───────── Admin only ───────── */
 Route::middleware($adminOnly)->group(function () {

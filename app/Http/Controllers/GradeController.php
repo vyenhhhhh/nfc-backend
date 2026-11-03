@@ -88,7 +88,7 @@ class GradeController extends Controller
                 'attendance' => self::attendance((int) $u->id),
                 'appraisal' => $e && $e->mode === 'system' ? [
                     'id' => (int) $e->id, 'ratings' => json_decode($e->ratings ?: '{}', true), 'score' => $sup['total'], 'categories' => $sup['categories'],
-                    'strengths' => $e->strengths, 'improvements' => $e->improvements, 'comments' => $e->comments,
+                    'strengths' => $e->strengths, 'improvements' => $e->improvements, 'comments' => $e->comments, 'share_comments' => (bool) ($e->share_comments ?? true),
                     'evaluator_name' => $e->evaluator_name, 'updated_at' => $e->updated_at,
                 ] : null,
                 'grade' => $g ? [
@@ -167,10 +167,18 @@ class GradeController extends Controller
 
         $sup = Grading::supervisor($e->ratings ?? null);
         $coord = Grading::coordinator($g->ratings);
+        // the live appraisal may no longer give a total (edited / removed after release), so fall back to the score saved at release,
+        // and last, to what the released final grade implies: (final - coordinator) / supervisor share
+        $share = (config('ojt.grading.supervisor_share') ?? 60) / 100;
+        $supScore = $sup['total'];
+        if ($supScore === null && $g->supervisor_score !== null) $supScore = (float) $g->supervisor_score;
+        if ($supScore === null && $coord['total'] !== null && $share > 0) $supScore = round(((float) $g->final_grade - $coord['total']) / $share, 2);
+        $sup['total'] = $supScore;
         return response()->json([
             'released' => true, 'final_grade' => (float) $g->final_grade, 'equivalent' => Grading::equivalent((float) $g->final_grade), 'released_at' => $g->finalized_at,
             'supervisor' => ['score' => $sup['total'], 'categories' => $sup['categories'], 'by' => $e->evaluator_name ?? null,
-                             'strengths' => $e->strengths ?? null, 'improvements' => $e->improvements ?? null],
+                             'strengths' => ($e->share_comments ?? true) ? ($e->strengths ?? null) : null,
+                             'improvements' => ($e->share_comments ?? true) ? ($e->improvements ?? null) : null],
             'coordinator' => ['score' => $coord['total'], 'categories' => $coord['categories'], 'by' => $g->graded_by_name],
             'remarks' => $g->remarks,
         ]);

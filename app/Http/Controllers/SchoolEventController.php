@@ -36,6 +36,8 @@ class SchoolEventController extends Controller
             'event_name' => 'required|string|max:160',
             'reason'     => 'nullable|string|max:500',
             'mandatory'  => 'nullable|boolean',
+            'portion'    => 'nullable|in:whole,am,pm',
+            'proof'      => 'required|file|mimes:jpg,jpeg,png,pdf|max:5120',
         ]);
         $auth  = $this->auth($request);
         $today = Carbon::today('Asia/Manila');
@@ -50,6 +52,13 @@ class SchoolEventController extends Controller
             return response()->json(['message' => 'You already filed a school event for that day.'], 409);
         }
 
+        $proofPath = null; $proofName = null;
+        if ($request->hasFile('proof')) {
+            $f = $request->file('proof');
+            $proofName = $f->getClientOriginalName();
+            $proofPath = $f->store('excuse-proofs', config('filesystems.uploads', 'public'));
+        }
+
         $now = Carbon::now('Asia/Manila');
         $id  = DB::table('school_event_excuses')->insertGetId([
             'user_id'    => $auth->id,
@@ -57,6 +66,9 @@ class SchoolEventController extends Controller
             'event_name' => trim($data['event_name']),
             'mandatory'  => (bool) ($data['mandatory'] ?? false),
             'reason'     => $data['reason'] ?? null,
+            'portion'    => $data['portion'] ?? 'whole',
+            'proof_path' => $proofPath,
+            'proof_name' => $proofName,
             'status'     => 'pending',
             'created_at' => $now,
             'updated_at' => $now,
@@ -85,6 +97,9 @@ class SchoolEventController extends Controller
         if (!in_array($row->status, ['pending', 'endorsed'], true)) {
             return response()->json(['message' => 'Only waiting requests can be removed.'], 409);
         }
+        if (!empty($row->proof_path)) {
+            try { \Illuminate\Support\Facades\Storage::disk(config('filesystems.uploads', 'public'))->delete($row->proof_path); } catch (\Throwable $e) { /* keep going */ }
+        }
         DB::table('school_event_excuses')->where('id', $id)->delete();
         return response()->json(['message' => 'Request removed.']);
     }
@@ -103,7 +118,7 @@ class SchoolEventController extends Controller
 
         return response()->json(
             DB::table('school_event_excuses')->where('user_id', $uid)->where('status', 'approved')
-                ->orderBy('date')->get(['date', 'event_name', 'mandatory'])
+                ->orderBy('date')->get(['date', 'event_name', 'mandatory', 'portion'])
         );
     }
 

@@ -336,6 +336,16 @@ class AttendanceController extends Controller
         );
     }
 
+    // POST /api/me/ping: the portal is open for this account (sent about once a minute)
+    public function ping(Request $request)
+    {
+        $auth = $request->attributes->get('auth_user');
+        if ($auth && Schema::hasColumn('users', 'last_seen_at')) {
+            DB::table('users')->where('id', $auth->id)->update(['last_seen_at' => Carbon::now('Asia/Manila')]);
+        }
+        return response()->json(['ok' => true]);
+    }
+
     // ── All Users (with the NFC card UID, if any) ─────────
     public function allUsers(Request $request)
     {
@@ -389,12 +399,22 @@ class AttendanceController extends Controller
             'scope'          => 'nullable|in:local,inbound,outbound',
             'dtr_mode'       => 'nullable|in:two,four',
             'supervisor_id'  => 'nullable|integer|exists:users,id',
-            'photo'          => 'nullable|image|max:2048',
+            'photo'          => 'nullable|image|mimes:jpg,jpeg,png,webp|max:2048',
+            'signature'      => 'nullable|image|mimes:jpg,jpeg,png,webp|max:2048',
+            'position'        => 'nullable|string|max:150',
+            'hte_address'     => 'nullable|string|max:255',
+            'moa_valid_until' => 'nullable|date',
             'emergency_contact_name'     => 'nullable|string|max:150',
             'emergency_contact_relation' => 'nullable|string|max:60',
             'emergency_contact_number'   => 'nullable|string|max:20',
             'emergency_contact_address'  => 'nullable|string|max:255',
         ]);
+
+        // the OJT coordinator may add interns and HTE supervisors only (never admins or other coordinators)
+        $actor = $request->attributes->get('auth_user');
+        if (($actor->role ?? null) === 'ojt_coordinator' && !in_array($data['role'], ['intern', 'supervisor'], true)) {
+            return response()->json(['message' => 'You can add interns and HTE supervisors. Ask the admin to add other roles.'], 403);
+        }
 
         if (!empty($data['supervisor_id'])
             && DB::table('users')->where('id', $data['supervisor_id'])->value('role') !== 'supervisor') {
@@ -455,6 +475,19 @@ class AttendanceController extends Controller
             ]);
         }
 
+        // staff details (when the columns exist: php artisan migrate)
+        if (!$isIntern && Schema::hasColumn('users', 'position')) {
+            $extra = [
+                'position'    => $data['position'] ?? null,
+                'hte_address' => ($data['role'] === 'supervisor') ? ($data['hte_address'] ?? null) : null,
+                'moa_valid_until' => ($data['role'] === 'supervisor' && !empty($data['moa_valid_until'])) ? Carbon::parse($data['moa_valid_until'])->toDateString() : null,
+            ];
+            if ($request->hasFile('signature')) {
+                $extra['signature'] = $request->file('signature')->store('signatures', config('filesystems.uploads', 'public'));
+            }
+            DB::table('users')->where('id', $userId)->update($extra);
+        }
+
         // NFC cards are not linked here: every intern follows the same steps
         // (request → coordinator approves → intern signs → admin prints → admin links in Card Requests)
         $message = 'User added successfully.';
@@ -493,6 +526,9 @@ class AttendanceController extends Controller
             'uid'            => 'nullable|string|max:64',
             'date_of_birth'  => 'nullable|date|before:today',
             'password'       => 'nullable|string|min:6|max:100',   // admin sets a new password
+            'position'        => 'nullable|string|max:150',
+            'hte_address'     => 'nullable|string|max:255',
+            'moa_valid_until' => 'nullable|date',
             'emergency_contact_name'     => 'nullable|string|max:150',
             'emergency_contact_relation' => 'nullable|string|max:60',
             'emergency_contact_number'   => 'nullable|string|max:20',
@@ -503,9 +539,13 @@ class AttendanceController extends Controller
         $auth    = $request->attributes->get('auth_user');
         $isAdmin = $auth && $auth->role === 'admin';
 
-        // only the admin may edit account / profile details (coordinators, supervisors and interns can only view)
+        // the admin edits any account; the OJT coordinator edits interns and HTE supervisors only (and can't set passwords)
+        $isCoord = $auth && $auth->role === 'ojt_coordinator';
+        if (!$isAdmin && !($isCoord && in_array($user->role, ['intern', 'supervisor'], true))) {
+            return response()->json(['message' => 'Only the admin or OJT coordinator can edit this account.'], 403);
+        }
         if (!$isAdmin) {
-            return response()->json(['message' => 'Only the admin can edit profile information.'], 403);
+            unset($data['password']);
         }
 
         $isIntern = $user->role === 'intern';
@@ -573,6 +613,15 @@ class AttendanceController extends Controller
         // a supervisor's HTE (company/office) is kept in the same "placement" field as an intern's placement
         if ($user->role === 'supervisor' && array_key_exists('placement', $data)) {
             $update['placement'] = $data['placement'] ?? null;
+        }
+
+        // staff details: only when the form sent them (and the columns exist)
+        if (!$isIntern && Schema::hasColumn('users', 'position')) {
+            if ($request->has('position')) $update['position'] = trim((string) ($data['position'] ?? '')) ?: null;
+            if ($user->role === 'supervisor') {
+                if ($request->has('hte_address')) $update['hte_address'] = trim((string) ($data['hte_address'] ?? '')) ?: null;
+                if ($request->has('moa_valid_until')) $update['moa_valid_until'] = !empty($data['moa_valid_until']) ? Carbon::parse($data['moa_valid_until'])->toDateString() : null;
+            }
         }
 
         if ($isIntern) {
@@ -808,13 +857,18 @@ class AttendanceController extends Controller
     public function updatePhoto(Request $request, $id)
     {
         $request->validate([
-            'photo' => 'required|image|max:2048',
+            'photo' => 'required|image|mimes:jpg,jpeg,png,webp|max:2048',
         ]);
 
         $user = DB::table('users')->where('id', $id)->first();
 
         if (!$user) {
             return response()->json(['message' => 'User not found.'], 404);
+        }
+
+        $auth = $request->attributes->get('auth_user');
+        if ($auth && $auth->role === 'ojt_coordinator' && !in_array($user->role, ['intern', 'supervisor'], true)) {
+            return response()->json(['message' => 'Only the admin can change this photo.'], 403);
         }
 
         if ($user->photo) {
@@ -833,5 +887,31 @@ class AttendanceController extends Controller
             'message' => 'Photo updated.',
             'photo'   => $photoPath,
         ]);
+    }
+
+    // ── Staff signature (used on the DTR and reports) ──────
+    public function updateSignature(Request $request, $id)
+    {
+        $request->validate(['signature' => 'required|image|mimes:jpg,jpeg,png,webp|max:2048']);
+
+        $user = DB::table('users')->where('id', $id)->first();
+        if (!$user) {
+            return response()->json(['message' => 'User not found.'], 404);
+        }
+        if (!Schema::hasColumn('users', 'signature')) {
+            return response()->json(['message' => 'Run php artisan migrate first.'], 422);
+        }
+        $auth = $request->attributes->get('auth_user');
+        if ($auth && $auth->role === 'ojt_coordinator' && !in_array($user->role, ['intern', 'supervisor'], true)) {
+            return response()->json(['message' => 'Only the admin can change this signature.'], 403);
+        }
+
+        if (!empty($user->signature)) {
+            Storage::disk(config('filesystems.uploads', 'public'))->delete($user->signature);
+        }
+        $path = $request->file('signature')->store('signatures', config('filesystems.uploads', 'public'));
+        DB::table('users')->where('id', $id)->update(['signature' => $path]);
+
+        return response()->json(['message' => 'Signature updated.', 'signature' => $path]);
     }
 }

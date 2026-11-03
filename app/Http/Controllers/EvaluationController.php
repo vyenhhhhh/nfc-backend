@@ -76,6 +76,7 @@ class EvaluationController extends Controller
             'improvements'   => 'nullable|string|max:3000',
             'comments'       => 'nullable|string|max:3000',
             'recommendation' => 'nullable|in:hire,recommend,none',
+            'share_comments' => 'nullable|boolean',
             'file'           => 'required_if:mode,paper|nullable|file|mimes:pdf,jpg,jpeg,png|max:10240',
         ]);
         $intern = DB::table('users')->where('id', $data['intern_id'])->first();
@@ -91,6 +92,8 @@ class EvaluationController extends Controller
             'comments' => $data['comments'] ?? null, 'recommendation' => $data['recommendation'] ?? null, 'updated_at' => $now,
             'ratings' => null, 'average' => null, 'file_path' => null, 'original_name' => null,
         ];
+        // may the intern read the strengths / weaknesses? (needs the share_comments column from the migration)
+        if (Schema::hasColumn('evaluations', 'share_comments')) $row['share_comments'] = (bool) ($data['share_comments'] ?? true);
 
         if ($data['mode'] === 'system') {
             // the CCIS supervisor appraisal (config ojt.grading.supervisor): every item 1-5
