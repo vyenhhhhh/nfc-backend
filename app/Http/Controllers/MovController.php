@@ -77,7 +77,7 @@ class MovController extends Controller
             $title = $report->title;
         }
 
-        $path = $request->file('file')->store('movs', config('filesystems.uploads', 'public'));
+        $path = \App\Services\PrivateFiles::store($request->file('file'), 'movs');   // private: opened with short-lived links only
 
         $id = DB::table('movs')->insertGetId([
             'user_id'       => $request->user_id,
@@ -118,7 +118,7 @@ class MovController extends Controller
             return response()->json(['message' => 'Only pending submissions can be removed.'], 409);
         }
 
-        if ($mov->file_path) Storage::disk(config('filesystems.uploads', 'public'))->delete($mov->file_path);
+        \App\Services\PrivateFiles::delete($mov->file_path);
         DB::table('movs')->where('id', $id)->delete();
 
         return response()->json(['message' => 'Submission removed.']);

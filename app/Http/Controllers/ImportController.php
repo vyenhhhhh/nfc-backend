@@ -183,13 +183,13 @@ class ImportController extends Controller
             try {
                 Mail::raw(
                     "Hello {$d['first_name']},\n\n"
-                    . "Your MYTRACK account for your OJT has been created.\n\n"
+                    . "Your CSU CCIS OJT account has been created.\n\n"
                     . "    Email:              {$d['email']}\n"
                     . "    Temporary password: {$pass}\n\n"
                     . ($loginUrl ? "Sign in here: {$loginUrl}\n\n" : '')
                     . "You will be asked to set your own password the first time you sign in.\n"
-                    . "Do not share this password with anyone.\n\nCSU CCIS MYTRACK",
-                    function ($m) use ($d) { $m->to($d['email'])->subject('Your MYTRACK account'); }
+                    . "Do not share this password with anyone.\n\nCSU CCIS OJT",
+                    function ($m) use ($d) { $m->to($d['email'])->subject('Your CSU CCIS OJT account'); }
                 );
             } catch (\Throwable $e) {
                 Log::error('Import welcome email failed for ' . $d['email'] . ': ' . $e->getMessage());

@@ -21,7 +21,6 @@ use Illuminate\Support\Facades\Storage;
 class EvaluationController extends Controller
 {
     private function auth(Request $r) { return $r->attributes->get('auth_user'); }
-    private function disk() { return Storage::disk(config('filesystems.uploads', 'public')); }
 
     /** may this user see / evaluate this intern? supervisors: only their own interns */
     private function allowed($auth, $intern): bool
@@ -103,14 +102,14 @@ class EvaluationController extends Controller
             $row['average'] = round(array_sum($clean) / max(count($clean), 1), 2);
         } else {
             $f = $request->file('file');
-            $row['file_path'] = $f->store('evaluations', config('filesystems.uploads', 'public'));
+            $row['file_path'] = \App\Services\PrivateFiles::store($f, 'evaluations');   // private: short-lived links only
             $row['original_name'] = mb_substr($f->getClientOriginalName(), 0, 191);
         }
 
         $old = DB::table('evaluations')->where('intern_id', $intern->id)->first();
         if ($old) {
             if ($old->file_path && $old->file_path !== $row['file_path']) {
-                try { $this->disk()->delete($old->file_path); } catch (\Throwable $e) { /* keep going */ }
+                \App\Services\PrivateFiles::delete($old->file_path);
             }
             DB::table('evaluations')->where('id', $old->id)->update($row);
         } else {
@@ -136,7 +135,7 @@ class EvaluationController extends Controller
         if (!$e) return response()->json(['message' => 'Not found.'], 404);
         $intern = DB::table('users')->where('id', $e->intern_id)->first();
         if (!$this->allowed($auth, $intern)) return response()->json(['message' => 'Not allowed.'], 403);
-        if ($e->file_path) { try { $this->disk()->delete($e->file_path); } catch (\Throwable $x) { /* ignore */ } }
+        \App\Services\PrivateFiles::delete($e->file_path);
         DB::table('evaluations')->where('id', $id)->delete();
         Activity::record($auth, 'Evaluation removed', $intern->name ?? '', $request);
         return response()->json(['message' => 'Evaluation removed.']);

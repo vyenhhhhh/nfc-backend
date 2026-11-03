@@ -56,7 +56,7 @@ class SchoolEventController extends Controller
         if ($request->hasFile('proof')) {
             $f = $request->file('proof');
             $proofName = $f->getClientOriginalName();
-            $proofPath = $f->store('excuse-proofs', config('filesystems.uploads', 'public'));
+            $proofPath = \App\Services\PrivateFiles::store($f, 'excuse-proofs');   // private: short-lived links only
         }
 
         $now = Carbon::now('Asia/Manila');
@@ -98,7 +98,7 @@ class SchoolEventController extends Controller
             return response()->json(['message' => 'Only waiting requests can be removed.'], 409);
         }
         if (!empty($row->proof_path)) {
-            try { \Illuminate\Support\Facades\Storage::disk(config('filesystems.uploads', 'public'))->delete($row->proof_path); } catch (\Throwable $e) { /* keep going */ }
+            \App\Services\PrivateFiles::delete($row->proof_path);
         }
         DB::table('school_event_excuses')->where('id', $id)->delete();
         return response()->json(['message' => 'Request removed.']);

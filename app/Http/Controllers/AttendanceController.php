@@ -217,8 +217,13 @@ class AttendanceController extends Controller
             'created_at' => $now,
         ]);
 
+        // a tap the kiosk saved while it was offline is marked, so the coordinator can see it
+        // (php artisan migrate adds the columns; remembered for an hour so a tap doesn't ask every time)
+        $markOffline = $offline && \Illuminate\Support\Facades\Cache::remember('att_offline_cols', 3600,
+            fn () => Schema::hasColumn('attendance_records', 'offline_in'));
+
         if ($action === 'CHECK_IN') {
-            DB::table('attendance_records')->insert([
+            DB::table('attendance_records')->insert(array_merge([
                 'user_id'        => $card->user_id,
                 'uid'            => $uid,
                 'date'           => $today,
@@ -228,7 +233,7 @@ class AttendanceController extends Controller
                 'checked_out_at' => null,
                 'created_at'     => $now,
                 'updated_at'     => $now,
-            ]);
+            ], $markOffline ? ['offline_in' => true] : []));
 
             // which official start applies: 1:00 PM for a 4-tap PM check-in, otherwise 8:00 AM
             $start = ($mode === 'four' && $now->hour >= 12) ? $sched['pm_in'] : $sched['am_in'];
@@ -245,6 +250,7 @@ class AttendanceController extends Controller
                 'checked_out_at' => $now,
                 'updated_at'     => $now,
             ];
+            if ($markOffline) $update['offline_out'] = true;
 
             // time after 5:00 PM is overtime: it counts only if the coordinator approves it
             [, $otSeconds] = OjtHours::split($openRecord->checked_in_at, $now);
@@ -472,7 +478,8 @@ class AttendanceController extends Controller
             'college'        => $isIntern ? 'CCIS' : null,
             'password'       => Hash::make($data['password']),
             'role'           => $data['role'],
-            'work_mode'      => $isIntern ? ($data['work_mode'] ?? 'onsite') : 'onsite',
+            // the modality decides it (interns don't ask for work from home): virtual = offsite (no kiosk, Submit Online)
+            'work_mode'      => $isIntern ? ((($data['modality'] ?? 'onsite') === 'virtual') ? 'offsite' : ($data['work_mode'] ?? 'onsite')) : 'onsite',
             'tracking_type'  => 'hours',   // every intern renders the required hours of their program
             'dtr_mode'       => $isIntern ? ($data['dtr_mode'] ?? 'two') : 'two',
             'supervisor_id'  => $isIntern ? ($data['supervisor_id'] ?? null) : null,
@@ -501,7 +508,7 @@ class AttendanceController extends Controller
                 'moa_valid_until' => ($data['role'] === 'supervisor' && !empty($data['moa_valid_until'])) ? Carbon::parse($data['moa_valid_until'])->toDateString() : null,
             ];
             if ($request->hasFile('signature')) {
-                $extra['signature'] = $request->file('signature')->store('signatures', config('filesystems.uploads', 'public'));
+                $extra['signature'] = \App\Services\PrivateFiles::store($request->file('signature'), 'signatures');
             }
             DB::table('users')->where('id', $userId)->update($extra);
         }
@@ -648,6 +655,9 @@ class AttendanceController extends Controller
             $update['placement']     = $data['placement'] ?? null;
             $update['college']       = 'CCIS';
             $update['work_mode']     = $data['work_mode'] ?? $user->work_mode;
+            // the modality decides the work mode, like setPlacement(): virtual = offsite, on-site = onsite
+            if (($data['modality'] ?? null) === 'virtual') $update['work_mode'] = 'offsite';
+            if (($data['modality'] ?? null) === 'onsite')  $update['work_mode'] = 'onsite';
             $update['tracking_type'] = 'hours';   // no output-based tracking
             if (Schema::hasColumn('users', 'modality')) {
                 $update['modality'] = $data['modality'] ?? ($user->modality ?? 'onsite');
@@ -732,7 +742,7 @@ class AttendanceController extends Controller
                 if (Schema::hasTable('movs')) {
                     $files = DB::table('movs')->where('user_id', $id)->pluck('file_path');
                     foreach ($files as $f) {
-                        if ($f) Storage::disk(config('filesystems.uploads', 'public'))->delete($f);
+                        \App\Services\PrivateFiles::delete($f);
                     }
                     DB::table('movs')->where('user_id', $id)->delete();
 
@@ -934,9 +944,9 @@ class AttendanceController extends Controller
         }
 
         if (!empty($user->signature)) {
-            Storage::disk(config('filesystems.uploads', 'public'))->delete($user->signature);
+            \App\Services\PrivateFiles::delete($user->signature);
         }
-        $path = $request->file('signature')->store('signatures', config('filesystems.uploads', 'public'));
+        $path = \App\Services\PrivateFiles::store($request->file('signature'), 'signatures');   // private: short-lived links only
         DB::table('users')->where('id', $id)->update(['signature' => $path]);
 
         return response()->json(['message' => 'Signature updated.', 'signature' => $path]);
