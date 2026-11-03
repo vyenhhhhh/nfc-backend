@@ -18,16 +18,20 @@ use Illuminate\Support\Facades\Schema;
 class LiveController extends Controller
 {
     // tables that, when they change, should refresh the dashboards
+    // (activity_logs, kiosks, api_tokens and sessions are left out on purpose: they change all the time)
     private const TABLES = [
         'attendance_records', 'online_submissions', 'movs', 'time_corrections',
         'nfc_requests', 'nfc_cards', 'calendar_events', 'announcements', 'notifications', 'users',
-        'dtr_certifications', 'work_mode_requests', 'requirement_deadlines',
+        'dtr_certifications', 'requirement_deadlines',
+        'evaluations', 'intern_grades', 'school_event_excuses', 'report_schedules',
+        'card_flags', 'requirement_templates',
     ];
 
     public function show()
     {
         // which of those tables exist (and their columns) - checked once an hour, not on every call
-        $tables = Cache::remember('live_tables_v3', 3600, function () {
+        // (change the name when TABLES changes, so the new list is used right away)
+        $tables = Cache::remember('live_tables_v4', 3600, function () {
             $found = [];
             foreach (self::TABLES as $t) {
                 if (!Schema::hasTable($t)) continue;
@@ -48,7 +52,8 @@ class LiveController extends Controller
                 . "FROM {$t}";
         }
 
-        $rows = $parts ? DB::select(implode(' UNION ALL ', $parts)) : [];
+        // everyone asking within the same 3 seconds shares one count (cheap with many users online)
+        $rows = $parts ? Cache::remember('live_rows', 3, fn () => DB::select(implode(' UNION ALL ', $parts))) : [];
 
         // the database may return the rows in a different order each time; sort them so the
         // fingerprint only changes when the data really changes (otherwise pages reload for nothing)
