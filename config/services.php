@@ -2,6 +2,11 @@
 
 return [
 
+    // Sign in with Google (the same client ID as VITE_GOOGLE_CLIENT_ID in the React .env)
+    'google' => [
+        'client_id' => env('GOOGLE_CLIENT_ID'),
+    ],
+
     /*
     |--------------------------------------------------------------------------
     | Third Party Services

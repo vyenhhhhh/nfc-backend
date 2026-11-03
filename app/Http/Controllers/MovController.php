@@ -141,10 +141,23 @@ class MovController extends Controller
     // Intern views their own submissions
     public function myMovs(Request $request)
     {
+        $auth  = $request->attributes->get('auth_user');
+        $uid   = (int) $request->query('user_id');
+        $scope = \App\Services\Supervision::scope($auth);
+        if ($scope !== null && !in_array($uid, array_map('intval', (array) $scope), true)) {
+            return response()->json(['message' => 'You can only view your own interns.'], 403);
+        }
+
         $movs = DB::table('movs')
-            ->where('user_id', $request->query('user_id'))
+            ->where('user_id', $uid)
             ->orderByDesc('created_at')
             ->get();
+
+        // only the intern and the OJT coordinator may open the files themselves
+        $seesFiles = $auth && ((int) $auth->id === $uid || $auth->role === 'ojt_coordinator');
+        if (!$seesFiles) {
+            $movs = $movs->map(function ($m) { unset($m->file_path); return $m; })->values();
+        }
 
         return response()->json($movs);
     }

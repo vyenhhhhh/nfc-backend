@@ -105,6 +105,11 @@ class OnlineSubmissionController extends Controller
         $request->validate([
             'user_id' => 'required|integer',
         ]);
+        // an HTE supervisor sees only their own interns (interns: only themselves, see ApiTokenAuth)
+        $scope = Supervision::scope($request->attributes->get('auth_user'));
+        if ($scope !== null && !in_array((int) $request->user_id, array_map('intval', (array) $scope), true)) {
+            return response()->json(['message' => 'You can only view your own interns.'], 403);
+        }
 
         $submissions = DB::table('online_submissions as os')
             ->where('os.user_id', $request->user_id)

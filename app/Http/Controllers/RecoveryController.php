@@ -101,7 +101,7 @@ class RecoveryController extends Controller
 
     public function changePassword(Request $request)
     {
-        $request->validate(['new_password' => 'required|string|min:6|max:100']);
+        $request->validate(['new_password' => 'required|string|min:8|max:100']);
         $user = $this->checkedUser($request);   // "password" = the current password
         if (!$user) return response()->json(['message' => 'Your current password is wrong.'], 403);
 
@@ -165,7 +165,7 @@ class RecoveryController extends Controller
     {
         $request->validate([
             'reset_token'  => 'required|string|max:100',
-            'new_password' => 'required|string|min:6|max:100',
+            'new_password' => 'required|string|min:8|max:100',
         ]);
 
         $pass = DB::table('recovery_resets')

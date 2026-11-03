@@ -67,7 +67,7 @@ class AuthController extends Controller
     public function googleLogin(Request $request)
     {
         $request->validate(['access_token' => 'required|string']);
-        $clientId = env('GOOGLE_CLIENT_ID');
+        $clientId = config('services.google.client_id');   // (env() returns nothing after config:cache)
         if (!$clientId) {
             return response()->json(['message' => 'Google sign-in is not set up yet.'], 503);
         }
@@ -144,6 +144,11 @@ class AuthController extends Controller
             return response()->json(['message' => 'Not allowed.'], 403);
         }
 
+                // an HTE supervisor may open their own account and their own interns only
+        if (($auth->role ?? '') === 'supervisor' && $wanted !== $authId
+            && !\App\Services\Supervision::supervises($auth, $wanted)) {
+            return response()->json(['message' => 'Not allowed.'], 403);
+        }
         $user = DB::table('users')->where('id', $wanted)->first();
 
         if (!$user) {
@@ -151,6 +156,8 @@ class AuthController extends Controller
         }
 
         unset($user->password, $user->remember_token);
+                // birthdays: the person themself and the admin only (same rule as the account list)
+        if ($wanted !== $authId && ($auth->role ?? '') !== 'admin') unset($user->date_of_birth);
 
         // for the My Profile page: the linked NFC card and the supervisor's name
         $user->nfc_uid = DB::table('nfc_cards')->where('user_id', $user->id)->value('uid');

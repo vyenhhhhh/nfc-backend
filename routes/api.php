@@ -75,27 +75,14 @@ Route::middleware($anyUser)->group(function () {
     // first sign-in after the Excel import: set your own password
     Route::post('/account/first-password',           [AuthController::class, 'firstPassword'])->middleware('throttle:10,1');
 
-    // Intern
+    // Intern: reading (staff pages read some of these too, each limited to the staff member's own interns)
     Route::get('/intern/attendance',     [AttendanceController::class, 'internAttendance']);
-    Route::post('/intern/submit-online', [OnlineSubmissionController::class, 'submit']);
     Route::get('/intern/my-online',      [OnlineSubmissionController::class, 'mine']);
     Route::get('/intern/nfc-request',    [NfcRequestController::class, 'mine']);
-    Route::post('/intern/nfc-request',   [NfcRequestController::class, 'store']);
-    Route::post('/intern/submit-mov',    [MovController::class, 'submit']);
     Route::get('/intern/my-movs',        [MovController::class, 'myMovs']);
     Route::get('/requirement-templates', [RequirementTemplateController::class, 'index']);   // blank forms to download and print
-
-    // remove your own pending submission
-    Route::delete('/intern/submit-online/{id}', [OnlineSubmissionController::class, 'destroy']);
-    Route::delete('/intern/submit-mov/{id}',    [MovController::class, 'destroy']);
-
-    // forgot to tap out: ask the coordinator to set the time out
     Route::get('/intern/time-corrections',  [TimeCorrectionController::class, 'mine']);
-    Route::post('/intern/time-corrections', [TimeCorrectionController::class, 'store']);
-
     Route::get('/intern/school-events',         [SchoolEventController::class, 'mine']);
-    Route::post('/intern/school-events',        [SchoolEventController::class, 'store']);
-    Route::delete('/intern/school-events/{id}', [SchoolEventController::class, 'destroy']);
     Route::get('/excused-days',                 [SchoolEventController::class, 'excused']);   // approved school-event days (DTR)
     
     // DTR certification status (interns see only their own)
@@ -116,6 +103,24 @@ Route::middleware($anyUser)->group(function () {
     Route::patch('/notifications/{id}/read', [NotificationController::class, 'markRead']);
     Route::delete('/notifications/{id}', [NotificationController::class, 'destroy']);
     Route::delete('/notifications',      [NotificationController::class, 'clear']);
+});
+
+/* ───────── Interns only: submitting and removing their own things ─────────
+   (a staff account can't submit for an intern, even by sending the intern's user_id) */
+Route::middleware(ApiTokenAuth::class . ':intern')->group(function () {
+    Route::post('/intern/submit-online', [OnlineSubmissionController::class, 'submit']);
+    Route::post('/intern/nfc-request',   [NfcRequestController::class, 'store']);
+    Route::post('/intern/submit-mov',    [MovController::class, 'submit']);
+
+    // remove your own pending submission
+    Route::delete('/intern/submit-online/{id}', [OnlineSubmissionController::class, 'destroy']);
+    Route::delete('/intern/submit-mov/{id}',    [MovController::class, 'destroy']);
+
+    // forgot to tap out: ask the HTE supervisor to set the time out
+    Route::post('/intern/time-corrections', [TimeCorrectionController::class, 'store']);
+
+    Route::post('/intern/school-events',        [SchoolEventController::class, 'store']);
+    Route::delete('/intern/school-events/{id}', [SchoolEventController::class, 'destroy']);
 });
 
 /* ───────── Admin, OJT coordinator, supervisor ───────── */

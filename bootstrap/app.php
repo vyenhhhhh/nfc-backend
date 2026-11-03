@@ -12,7 +12,8 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware) {
-        //
+        // real visitor IPs behind the host's proxy (TRUSTED_PROXIES in .env, see the middleware)
+        $middleware->replace(\Illuminate\Http\Middleware\TrustProxies::class, \App\Http\Middleware\TrustHostProxies::class);
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //

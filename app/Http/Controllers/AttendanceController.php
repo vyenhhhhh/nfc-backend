@@ -9,7 +9,9 @@ use App\Services\OjtHours;
 use App\Services\Supervision;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
@@ -72,6 +74,14 @@ class AttendanceController extends Controller
             Activity::record(DB::table('users')->where('id', $card->user_id)->first(), 'Offline tap sent',
                 'Saved on kiosk ' . ($kiosk->name ?? 'CCIS (main)') . ' at ' . $offline->format('M j, g:i A') . ', sent when it was back online.', $request);
         }
+
+        // one tap at a time for the same intern: a double read or two kiosks at the same moment
+        // can't both pass the checks below and record two time-ins
+        $lock = Cache::lock('tap-user-' . $card->user_id, 15);
+        if (!$lock->block(5)) {
+            return response()->json(['code' => 'DUPLICATE_TAP', 'message' => 'Your tap is still being processed. Please wait a moment.'], 409);
+        }
+        try {
 
         $intern = DB::table('users')->where('id', $card->user_id)->first();
 
@@ -272,6 +282,10 @@ class AttendanceController extends Controller
             'card_write' => CardSecurity::nextToken($request, $card),
             'secured'    => $checked['secured'],
         ]);
+
+        } finally {
+            $lock->release();
+        }
     }
 
     // ── the kiosk wrote the new one-time code on the card ──
@@ -285,7 +299,6 @@ class AttendanceController extends Controller
     }
 
     // ── Today's Records ───────────────────────────────────
-        // ── Today's Records ───────────────────────────────────
     public function today(Request $request)
     {
         $today = Carbon::today('Asia/Manila')->toDateString();
@@ -304,6 +317,11 @@ class AttendanceController extends Controller
     // ── Intern's Own Attendance ───────────────────────────
     public function internAttendance(Request $request)
     {
+        // interns: only their own (ApiTokenAuth). HTE supervisors: only their own interns.
+        $scope = Supervision::scope($request->attributes->get('auth_user'));
+        if ($scope !== null && !in_array((int) $request->query('user_id'), array_map('intval', (array) $scope), true)) {
+            return response()->json(['message' => 'You can only view the attendance of your own interns.'], 403);
+        }
         return response()->json(
             DB::table('attendance_records as a')
                 ->join('users as u', 'u.id', '=', 'a.user_id')
@@ -390,7 +408,7 @@ class AttendanceController extends Controller
             'program'        => 'nullable|required_if:role,intern|in:BSIT - 4,BSCS - 4,BSIS - 4',
             'email'          => 'required|email|unique:users,email',
             'date_of_birth'  => 'required|date|before:today',
-            'password'       => 'required|string|min:6',
+            'password'       => 'required|string|min:8',
             'role'           => 'required|in:intern,supervisor,admin,ojt_coordinator',
             'uid'            => 'nullable|string|max:64|unique:nfc_cards,uid',
             'work_mode'      => 'nullable|in:onsite,offsite',
@@ -525,7 +543,7 @@ class AttendanceController extends Controller
             'supervisor_id'  => 'nullable|integer|exists:users,id',
             'uid'            => 'nullable|string|max:64',
             'date_of_birth'  => 'nullable|date|before:today',
-            'password'       => 'nullable|string|min:6|max:100',   // admin sets a new password
+            'password'       => 'nullable|string|min:8|max:100',   // admin sets a new password
             'position'        => 'nullable|string|max:150',
             'hte_address'     => 'nullable|string|max:255',
             'moa_valid_until' => 'nullable|date',
@@ -674,7 +692,8 @@ class AttendanceController extends Controller
                 }
             });
         } catch (\Throwable $e) {
-            return response()->json(['message' => 'Database error: ' . $e->getMessage()], 500);
+            Log::error('updateUser failed: ' . $e->getMessage());
+            return response()->json(['message' => 'The changes could not be saved. Please try again.'], 500);
         }
 
         return response()->json([
@@ -690,6 +709,13 @@ class AttendanceController extends Controller
 
         if (!$user) {
             return response()->json(['message' => 'User not found.'], 404);
+        }
+
+        // an intern who already has attendance keeps their records: deactivate the account instead
+        if ($user->role === 'intern' && DB::table('attendance_records')->where('user_id', $id)->exists()) {
+            return response()->json([
+                'message' => 'This intern already has attendance records, so the account can\'t be deleted. Deactivate it instead (the records stay).',
+            ], 409);
         }
 
         try {
@@ -733,7 +759,8 @@ class AttendanceController extends Controller
                 DB::table('users')->where('id', $id)->delete();
             });
         } catch (\Throwable $e) {
-            return response()->json(['message' => 'Could not delete user: ' . $e->getMessage()], 500);
+            Log::error('deleteUser failed: ' . $e->getMessage());
+            return response()->json(['message' => 'The user could not be deleted. Please try again.'], 500);
         }
 
         return response()->json([

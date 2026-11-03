@@ -39,7 +39,7 @@ return [
 
     // A kiosk that loses the internet keeps the taps and sends them when it is back online.
     // Taps older than this are refused (the coordinator adds them by hand).
-    'offline_tap_max_hours' => 72,
+    'offline_tap_max_hours' => 24,
 
     // Quarterly report: a placement whose name has one of these words counts as "within the university"
     // (the coordinator can still change it per office in the report)

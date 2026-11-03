@@ -1,5 +1,5 @@
 <?php
-
+//announcementcontroller.php
 namespace App\Http\Controllers;
 
 use App\Services\Notifier;
@@ -26,12 +26,14 @@ class AnnouncementController extends Controller
     public function store(Request $request)
     {
         $data = $request->validate([
-            'user_id' => 'required|integer',
+            
             'title'   => 'required|string|max:150',
             'body'    => 'required|string|max:2000',
         ]);
 
-        $poster = DB::table('users')->where('id', $data['user_id'])->first();
+                // the poster is always the signed-in account (never a user_id sent by the browser)
+        $auth   = $request->attributes->get('auth_user');
+        $poster = $auth ? DB::table('users')->where('id', $auth->id)->first() : null;
         if (!$poster || !in_array($poster->role, ['ojt_coordinator', 'admin', 'supervisor'], true)) {
             return response()->json(['message' => 'Only staff can post announcements.'], 403);
         }

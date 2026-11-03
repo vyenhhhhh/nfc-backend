@@ -66,6 +66,9 @@ return [
     */
 
     'timezone' => 'Asia/Manila',
+    
+    // the host's proxy in front of the app (see app/Http/Middleware/TrustHostProxies.php)
+    'trusted_proxies' => env('TRUSTED_PROXIES', ''),
 
     /*
     |--------------------------------------------------------------------------
