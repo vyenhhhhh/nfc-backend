@@ -201,11 +201,11 @@ class RecoveryController extends Controller
                 // makes a code first if this user never opened My Profile
                 $code = $this->codeFor($user->id);
                 Mail::raw(
-                    "Hello {$user->name},\n\nYour MYTRACK recovery code is:\n\n    {$code}\n\n"
+                    "Hello {$user->name},\n\nYour CSU CCIS OJT recovery code is:\n\n    {$code}\n\n"
                     . "Use it on the login page (Forgot password?) to set a new password.\n"
-                    . "If you didn't ask for this, you can ignore this email.\n\nCSU CCIS MYTRACK",
+                    . "If you didn't ask for this, you can ignore this email.\n\nCSU CCIS OJT",
                     function ($m) use ($user) {
-                        $m->to($user->email)->subject('Your MYTRACK recovery code');
+                        $m->to($user->email)->subject('Your CSU CCIS OJT recovery code');
                     }
                 );
             } catch (\Throwable $e) {

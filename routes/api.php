@@ -28,6 +28,7 @@ use App\Http\Controllers\GradeController;
 use App\Http\Controllers\ImportController;
 use App\Http\Middleware\LogActivity;
 use App\Http\Controllers\SchoolEventController;
+use App\Http\Controllers\FileController;
 
 // Who may call what (see app/Http/Middleware/ApiTokenAuth.php)
 $anyUser     = ApiTokenAuth::class;                                          // any signed-in user
@@ -49,6 +50,8 @@ Route::post('/login/google', [AuthController::class, 'googleLogin'])->middleware
 Route::post('/tap',   [AttendanceController::class, 'tap'])->middleware('throttle:240,1');
 Route::post('/tap/confirm', [AttendanceController::class, 'confirmCardWrite'])->middleware('throttle:240,1');   // phone / ACR122U kiosk wrote the new card code
 Route::get('/kiosk/info', [AccountController::class, 'kioskInfo'])->middleware('throttle:30,1');   // kiosk screen: its name + who can tap
+// a private file on this computer, through a link from /files/link that works for a few minutes (the signature is the permission)
+Route::get('/files/open/{path}', [FileController::class, 'open'])->where('path', '.*')->middleware(['signed', 'throttle:120,1'])->name('files.open');
 
 Route::post('/recovery/verify',    [RecoveryController::class, 'verify'])->middleware('throttle:6,1');
 Route::post('/recovery/reset',     [RecoveryController::class, 'reset'])->middleware('throttle:6,1');
@@ -62,6 +65,10 @@ Route::middleware($anyUser)->group(function () {
     Route::get('/my-grade', [GradeController::class, 'mine']);             // intern: the internship grade, once released
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me',      [AuthController::class, 'me']);
+
+    // open an uploaded file: private ones (requirements, proofs, signatures) get a link that works for a few minutes,
+    // and only for the people who may see them (app/Http/Controllers/FileController.php)
+    Route::get('/files/link', [FileController::class, 'link'])->middleware('throttle:120,1');
 
     // live dashboards: "has anything changed?" (a tiny fingerprint, asked every few seconds)
     Route::get('/live', [LiveController::class, 'show']);

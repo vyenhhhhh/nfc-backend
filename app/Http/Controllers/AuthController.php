@@ -88,7 +88,7 @@ class AuthController extends Controller
         // 3. only accounts that already exist can sign in
         $user = DB::table('users')->whereRaw('lower(email) = ?', [$email])->first();
         if (!$user) {
-            return response()->json(['message' => "No MyTrack account uses $email. Ask your administrator to add it."], 403);
+            return response()->json(['message' => "No account uses $email. Ask your administrator to add it."], 403);
         }
         return $this->session($user, $request);
     }
@@ -187,7 +187,7 @@ class AuthController extends Controller
             'must_change_password' => false,
             'updated_at' => Carbon::now('Asia/Manila'),
         ]);
-        return response()->json(['message' => 'Password set. Welcome to MYTRACK!']);
+        return response()->json(['message' => 'Password set. Welcome to the CSU CCIS OJT system!']);
     }
 
     // Data Privacy Act: the user agrees once, on first sign-in
