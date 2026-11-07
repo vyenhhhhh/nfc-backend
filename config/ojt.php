@@ -62,11 +62,11 @@ return [
             ['key' => 'attendance', 'label' => 'Attendance & Punctuality', 'weight' => 15, 'co' => 'CO3', 'items' => [
                 ['key' => 'att_on_time',    'label' => 'Reports on time'],
                 ['key' => 'att_regular',    'label' => 'Reports regularly'],
-                ['key' => 'att_permission', 'label' => 'Requests permission before being absent'],
+                ['key' => 'att_permission', 'label' => 'Request permission before being absent'],
             ]],
             ['key' => 'performance', 'label' => 'Performance', 'weight' => 40, 'co' => 'CO1', 'items' => [
                 ['key' => 'perf_knows',      'label' => 'Knows his/her work well'],
-                ['key' => 'perf_on_time',    'label' => 'Completes assignments on time'],
+                ['key' => 'perf_on_time',    'label' => 'Completes assignment on time'],
                 ['key' => 'perf_speed',      'label' => 'Works with speed and accuracy'],
                 ['key' => 'perf_quality',    'label' => 'Ensures quality of work'],
                 ['key' => 'perf_output',     'label' => 'Produces much output with less time'],
@@ -79,7 +79,7 @@ return [
                 ['key' => 'att_suggestions',  'label' => 'Accepts suggestions'],
                 ['key' => 'att_cooperative',  'label' => 'Cooperates well with everybody'],
                 ['key' => 'att_honest',       'label' => 'Exhibits honesty and dependability'],
-                ['key' => 'att_instructions', 'label' => 'Follows instructions'],
+                ['key' => 'att_instructions', 'label' => 'Follows instruction'],
                 ['key' => 'att_safety',       'label' => 'Observes safety rules and regulations'],
                 ['key' => 'att_responsible',  'label' => 'Accepts responsibility'],
                 ['key' => 'att_respectful',   'label' => 'Respects superiors'],
@@ -158,7 +158,8 @@ return [
 
     // The internship starts only when ALL pre-internship requirements are approved by the coordinator.
     // Until then the kiosk and online attendance refuse the intern, and the During-internship
-    // requirements stay locked. Keep this list the same as PRE_REQUIREMENTS in DashKit.jsx.
+    // requirements stay locked. The OJT coordinator now manages the list (table requirement_defs,
+    // Interns → Requirements → Manage requirements); this list is only used until that table exists.
     'require_pre_requirements' => true,
     'pre_requirements' => [
         'capstone_summary', 'letter_of_intent', 'endorsement_letter', 'moa', 'internship_contract',

@@ -4,7 +4,6 @@ namespace App\Services;
 
 use Carbon\Carbon;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
@@ -13,7 +12,7 @@ use Illuminate\Support\Str;
  * Anti-copy for the NFC ID cards (the adviser's "token that changes every tap").
  *
  * The card holds two things (written by the kiosk as one NDEF record):
- *     MT1.<card UUID>.<one-time token>        (both 16 random bytes, base64url)
+ *     MT1.<card UUID>.<one-time token>        (both UUID v4 values, 16 bytes each, base64url)
  * The database keeps, per card: the UUID and a SHA-256 hash of the current token
  * (so even the database never holds the real token).
  *
@@ -42,9 +41,7 @@ class CardSecurity
     {
         if (self::$ready === null) {
             try {
-                // remembered for an hour, so a tap doesn't ask the database about its own tables every time
-                self::$ready = (bool) Cache::remember('card_security_ready', 3600,
-                    fn () => Schema::hasColumn('nfc_cards', 'card_uuid') && Schema::hasTable('card_flags'));
+                self::$ready = SchemaCache::has('nfc_cards', 'card_uuid') && SchemaCache::has('card_flags');
             } catch (\Throwable $e) {
                 self::$ready = false;
             }
@@ -91,22 +88,26 @@ class CardSecurity
 
     public static function findCardByUid(string $uid): ?object
     {
-        // only cards whose account still exists (a card left behind by a deleted account is ignored)
-        return DB::table('nfc_cards as n')
-            ->join('users as u', 'u.id', '=', 'n.user_id')
-            ->whereIn(DB::raw('UPPER(n.uid)'), self::uidVariants($uid))
-            ->select('n.*')
-            ->first();
+        $card = DB::table('nfc_cards')->whereIn(DB::raw('UPPER(uid)'), self::uidVariants($uid))->first();
+        if ($card && !DB::table('users')->where('id', $card->user_id)->exists()) {
+            // its account was deleted straight in the database: the card is free again
+            self::dropOrphans();
+            return null;
+        }
+        return $card;
     }
 
-    /** true when the same physical card (in any UID format) is already linked to someone other than $userId */
-    public static function uidTakenByOther(string $uid, int $userId): bool
+    /**
+     * Cards and card requests whose account no longer exists (deleted in Supabase instead of
+     * through Accounts → Delete). Without this the card stays "linked to another intern" forever.
+     */
+    public static function dropOrphans(): void
     {
-        return DB::table('nfc_cards as n')
-            ->join('users as u', 'u.id', '=', 'n.user_id')
-            ->whereIn(DB::raw('UPPER(n.uid)'), self::uidVariants($uid))
-            ->where('n.user_id', '!=', $userId)
-            ->exists();
+        $gone = fn ($t) => fn ($q) => $q->select(DB::raw(1))->from('users')->whereColumn('users.id', "{$t}.user_id");
+        try {
+            DB::table('nfc_cards')->whereNotExists($gone('nfc_cards'))->delete();
+            DB::table('nfc_requests')->whereNotExists($gone('nfc_requests'))->delete();
+        } catch (\Throwable $e) { /* best-effort */ }
     }
 
     private static function hexToDec(string $hex): string
@@ -293,7 +294,7 @@ class CardSecurity
         if (!in_array($request->input('writer'), ['webnfc', 'acr122u'], true)) return null;
 
         $uuid = $card->card_uuid ?: (string) Str::uuid();
-        $tok  = random_bytes(16);
+        $tok  = self::uuidToBytes((string) Str::uuid());   // the one-time code is a new UUID v4 (16 bytes) at every tap
         DB::table('nfc_cards')->where('id', $card->id)->update([
             'card_uuid'    => $uuid,
             'pending_hash' => self::hashToken($tok),
@@ -344,7 +345,7 @@ class CardSecurity
 
     private static function unknown(string $uid): array
     {
-        return ['ok' => false, 'status' => 404, 'body' => ['message' => 'This card is not registered yet. Please see the OJT office to link your card.']];
+        return ['ok' => false, 'status' => 404, 'body' => ['message' => "Card UID [{$uid}] is not registered."]];
     }
 
     private static function refuse(int $status, string $code, ?object $card, string $message): array
@@ -376,12 +377,12 @@ class CardSecurity
 
         Activity::record($intern, 'Card flagged: ' . $reason, "{$details} · kiosk: {$where} · UID {$uid}", $request);
 
-        // tell the admin and the coordinators (not more than once every 10 minutes for the same card)
+        // tell the admin (not more than once every 10 minutes for the same card)
         $recent = $card ? DB::table('card_flags')->where('nfc_card_id', $card->id)
             ->where('created_at', '>=', $now->copy()->subMinutes(10))->count() : 0;
         if ($recent <= 1) {
             try {
-                Notifier::toRoles(['admin', 'ojt_coordinator'], 'Suspicious card tap',
+                Notifier::toRoles(['admin'], 'Suspicious card tap',   // card alerts are the admin's job
                     ($intern->name ?? 'Unknown card') . ' · ' . $details . " Kiosk: {$where}, " . $now->format('M j, g:i A') . '.',
                     'card_flag');
             } catch (\Throwable $e) { /* notifications are best-effort */ }

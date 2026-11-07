@@ -184,7 +184,7 @@ class AccountController extends Controller
         if ($key === '') return ['ok' => false];
         $main = (string) config('ojt.kiosk_key');
         if ($main !== '' && hash_equals($main, $key)) return ['ok' => true, 'kiosk' => null];
-        if (!Schema::hasTable('kiosks')) return ['ok' => false];
+        if (!\App\Services\SchemaCache::has('kiosks')) return ['ok' => false];
         $k = DB::table('kiosks')->where('key_hash', hash('sha256', $key))->first();
         if (!$k || !$k->active) return ['ok' => false];
         DB::table('kiosks')->where('id', $k->id)->update(['last_seen_at' => Carbon::now('Asia/Manila')]);

@@ -1,3 +1,4 @@
+//2026_08_01_000000_ensure_users_columns.php
 <?php
 
 use Illuminate\Database\Migrations\Migration;

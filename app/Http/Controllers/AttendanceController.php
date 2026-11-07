@@ -151,7 +151,7 @@ class AttendanceController extends Controller
             // the internship starts only when ALL pre-internship requirements are approved
             $missing = Supervision::missingPreRequirements($card->user_id);
             if (count($missing) > 0) {
-                $total   = count(config('ojt.pre_requirements', []));
+                $total   = count(\App\Services\Requirements::preKeys());
                 $blocked = 'Your internship has not started yet: ' . ($total - count($missing)) . " of {$total} "
                     . 'pre-internship requirements are approved. Complete them under Submit MOV and wait for '
                     . 'your OJT coordinator to approve them.';
@@ -406,6 +406,7 @@ class AttendanceController extends Controller
             'first_name'     => 'required|string|max:100',
             'middle_name'    => 'nullable|string|max:100',
             'last_name'      => 'required|string|max:100',
+            'name_extension' => 'nullable|string|max:20',   // Jr., Sr., II, III ...
             'student_id'     => 'required|string|max:50|unique:users,student_id',  // student ID, or employee ID for staff
             'contact_number' => 'nullable|string|max:20',
             'address'        => 'nullable|string|max:255',
@@ -419,8 +420,10 @@ class AttendanceController extends Controller
             'uid'            => 'nullable|string|max:64|unique:nfc_cards,uid',
             'work_mode'      => 'nullable|in:onsite,offsite',
             'tracking_type'  => 'nullable|in:hours,output',
-            'modality'       => 'nullable|in:onsite,hybrid,virtual,project',
-            'scope'          => 'nullable|in:local,inbound,outbound',
+            'modality'       => 'nullable|in:onsite,hybrid,virtual,project,hte',   // hte = follow the HTE's modality
+            'hte_modality'   => 'nullable|in:onsite,hybrid,virtual,project',       // supervisor: the modality of their HTE
+            'hte_category'   => 'nullable|string|max:60',                          // supervisor: the kind of HTE (IT Company, Hospital, ...)
+            'scope'          => 'nullable|in:local,out_of_region,inbound,outbound',
             'dtr_mode'       => 'nullable|in:two,four',
             'supervisor_id'  => 'nullable|integer|exists:users,id',
             'photo'          => 'nullable|image|mimes:jpg,jpeg,png,webp|max:2048',
@@ -428,6 +431,8 @@ class AttendanceController extends Controller
             'position'        => 'nullable|string|max:150',
             'hte_address'     => 'nullable|string|max:255',
             'moa_valid_until' => 'nullable|date',
+            'output_required' => 'nullable|boolean',              // supervisor: the HTE requires a system output presentation
+            'prior_hours'     => 'nullable|numeric|min:0|max:1000', // intern: hours rendered in an earlier term
             'emergency_contact_name'     => 'nullable|string|max:150',
             'emergency_contact_relation' => 'nullable|string|max:60',
             'emergency_contact_number'   => 'nullable|string|max:20',
@@ -450,9 +455,20 @@ class AttendanceController extends Controller
             $data['first_name'],
             $data['middle_name'] ?? null,
             $data['last_name'],
+            $data['name_extension'] ?? null,
         ])));
 
         $isIntern = $data['role'] === 'intern';
+
+        // an intern follows their HTE's modality unless the coordinator picked a different one
+        $followHte = false;
+        if ($isIntern && \App\Services\HteModality::ready()) {
+            $hteMod = \App\Services\HteModality::forIntern((object) ['supervisor_id' => $data['supervisor_id'] ?? null, 'placement' => $data['placement'] ?? null]);
+            if (empty($data['modality']) || $data['modality'] === 'hte') { $data['modality'] = $hteMod ?: 'onsite'; $followHte = true; }
+            else $followHte = !$hteMod || $data['modality'] === $hteMod;
+        } elseif (($data['modality'] ?? null) === 'hte') {
+            $data['modality'] = 'onsite';
+        }
 
         $now = Carbon::now('Asia/Manila');
 
@@ -466,6 +482,7 @@ class AttendanceController extends Controller
             'first_name'     => $data['first_name'],
             'middle_name'    => $data['middle_name'] ?? null,
             'last_name'      => $data['last_name'],
+            'name_extension' => trim((string) ($data['name_extension'] ?? '')) ?: null,
             'email'          => $data['email'],
             'student_id'     => trim($data['student_id']),
             'contact_number' => $data['contact_number'] ?? null,
@@ -498,6 +515,16 @@ class AttendanceController extends Controller
                 'modality' => $data['modality'] ?? 'onsite',
                 'scope'    => $data['scope'] ?? 'local',
             ]);
+            if (\App\Services\HteModality::ready()) DB::table('users')->where('id', $userId)->update(['modality_custom' => !$followHte]);
+        }
+        // a supervisor: the kind of HTE (for the HTE list and the Quarterly Report)
+        if ($data['role'] === 'supervisor' && !empty($data['hte_category']) && Schema::hasColumn('users', 'hte_category')) {
+            DB::table('users')->where('id', $userId)->update(['hte_category' => trim($data['hte_category'])]);
+        }
+        // a supervisor: the modality of their HTE, given to the interns already placed there
+        if ($data['role'] === 'supervisor' && !empty($data['hte_modality']) && \App\Services\HteModality::ready()) {
+            DB::table('users')->where('id', $userId)->update(['hte_modality' => $data['hte_modality']]);
+            if (!empty($data['placement'])) \App\Services\HteModality::setForHte($data['placement'], $data['hte_modality'], true);
         }
 
         // staff details (when the columns exist: php artisan migrate)
@@ -511,6 +538,22 @@ class AttendanceController extends Controller
                 $extra['signature'] = \App\Services\PrivateFiles::store($request->file('signature'), 'signatures');
             }
             DB::table('users')->where('id', $userId)->update($extra);
+        }
+
+        // system output presentation (decided by the HTE) and hours from an earlier term
+        if (\App\Services\SchemaCache::has('users', 'output_required')) {
+            $more = [];
+            if ($data['role'] === 'supervisor') {
+                $more['output_required'] = array_key_exists('output_required', $data) && $data['output_required'] !== null ? (bool) $data['output_required'] : true;
+            }
+            if ($isIntern) {
+                $more['prior_hours'] = round((float) ($data['prior_hours'] ?? 0), 2);
+                // the form sends the rule of the chosen supervisor's HTE (it can be changed for this intern)
+                $supFlag = !empty($data['supervisor_id']) ? DB::table('users')->where('id', $data['supervisor_id'])->value('output_required') : null;
+                $more['output_required'] = array_key_exists('output_required', $data) && $data['output_required'] !== null
+                    ? (bool) $data['output_required'] : ($supFlag === null ? true : (bool) $supFlag);
+            }
+            if ($more) DB::table('users')->where('id', $userId)->update($more);
         }
 
         // NFC cards are not linked here: every intern follows the same steps
@@ -535,6 +578,7 @@ class AttendanceController extends Controller
             'first_name'     => 'required|string|max:100',
             'middle_name'    => 'nullable|string|max:100',
             'last_name'      => 'required|string|max:100',
+            'name_extension' => 'nullable|string|max:20',   // Jr., Sr., II, III ...
             'email'          => 'sometimes|required|email|unique:users,email,' . $id,
             'student_id'     => 'nullable|string|max:50|unique:users,student_id,' . $id,
             'contact_number' => 'nullable|string|max:20',
@@ -544,8 +588,10 @@ class AttendanceController extends Controller
             'placement'      => 'nullable|string|max:150',
             'work_mode'      => 'nullable|in:onsite,offsite',
             'tracking_type'  => 'nullable|in:hours,output',
-            'modality'       => 'nullable|in:onsite,hybrid,virtual,project',
-            'scope'          => 'nullable|in:local,inbound,outbound',
+            'modality'       => 'nullable|in:onsite,hybrid,virtual,project,hte',   // hte = follow the HTE's modality
+            'hte_modality'   => 'nullable|in:onsite,hybrid,virtual,project',       // supervisor: the modality of their HTE
+            'hte_category'   => 'nullable|string|max:60',                          // supervisor: the kind of HTE (IT Company, Hospital, ...)
+            'scope'          => 'nullable|in:local,out_of_region,inbound,outbound',
             'dtr_mode'       => 'nullable|in:two,four',
             'supervisor_id'  => 'nullable|integer|exists:users,id',
             'uid'            => 'nullable|string|max:64',
@@ -554,6 +600,8 @@ class AttendanceController extends Controller
             'position'        => 'nullable|string|max:150',
             'hte_address'     => 'nullable|string|max:255',
             'moa_valid_until' => 'nullable|date',
+            'output_required' => 'nullable|boolean',              // supervisor: the HTE requires a system output presentation
+            'prior_hours'     => 'nullable|numeric|min:0|max:1000', // intern: hours rendered in an earlier term
             'emergency_contact_name'     => 'nullable|string|max:150',
             'emergency_contact_relation' => 'nullable|string|max:60',
             'emergency_contact_number'   => 'nullable|string|max:20',
@@ -589,6 +637,7 @@ class AttendanceController extends Controller
 
         // the card can't already belong to someone else
         if ($isIntern && $uid !== '') {
+            \App\Services\CardSecurity::dropOrphans();   // a card of a deleted account is free again
             $taken = DB::table('nfc_cards')
                 ->where('uid', $uid)
                 ->where('user_id', '!=', $id)
@@ -601,8 +650,12 @@ class AttendanceController extends Controller
             }
         }
 
+        // the extension (Jr., III) changes only when the form sent it; other forms (My Profile) keep it
+        $ext = $request->has('name_extension')
+            ? (trim((string) ($data['name_extension'] ?? '')) ?: null)
+            : ($user->name_extension ?? null);
         $fullName = trim(implode(' ', array_filter([
-            $data['first_name'], $data['middle_name'] ?? null, $data['last_name'],
+            $data['first_name'], $data['middle_name'] ?? null, $data['last_name'], $ext,
         ])));
 
         $update = [
@@ -610,6 +663,7 @@ class AttendanceController extends Controller
             'first_name'     => $data['first_name'],
             'middle_name'    => $data['middle_name'] ?? null,
             'last_name'      => $data['last_name'],
+            'name_extension' => $ext,
             'email'          => $data['email'] ?? $user->email,
             'contact_number' => $data['contact_number'] ?? null,
             'address'        => $data['address'] ?? null,
@@ -648,6 +702,10 @@ class AttendanceController extends Controller
                 if ($request->has('moa_valid_until')) $update['moa_valid_until'] = !empty($data['moa_valid_until']) ? Carbon::parse($data['moa_valid_until'])->toDateString() : null;
             }
         }
+        $hasOutCol = \App\Services\SchemaCache::has('users', 'output_required');
+        if ($hasOutCol && $user->role === 'supervisor' && $request->has('output_required') && $data['output_required'] !== null) {
+            $update['output_required'] = (bool) $data['output_required'];
+        }
 
         if ($isIntern) {
             $update['program']       = $data['program'] ?? null;
@@ -662,6 +720,20 @@ class AttendanceController extends Controller
             if (Schema::hasColumn('users', 'modality')) {
                 $update['modality'] = $data['modality'] ?? ($user->modality ?? 'onsite');
                 $update['scope']    = $data['scope'] ?? ($user->scope ?? 'local');
+                // "Same as the HTE", or a modality of its own (an exception to the HTE)
+                if (\App\Services\HteModality::ready() && $request->has('modality')) {
+                    $after = (object) ['supervisor_id' => $request->has('supervisor_id') ? ($data['supervisor_id'] ?? null) : $user->supervisor_id, 'placement' => $data['placement'] ?? null];
+                    $hteMod = \App\Services\HteModality::forIntern($after);
+                    if (($data['modality'] ?? null) === 'hte' || empty($data['modality'])) {
+                        $update['modality'] = $hteMod ?: ($user->modality ?? 'onsite');
+                        $update['modality_custom'] = false;
+                    } else {
+                        $update['modality_custom'] = $hteMod ? $data['modality'] !== $hteMod : false;
+                    }
+                    $update['work_mode'] = \App\Services\HteModality::workMode($update['modality'], $update['work_mode'] ?? $user->work_mode);
+                } elseif (($update['modality'] ?? null) === 'hte') {
+                    $update['modality'] = $user->modality ?? 'onsite';
+                }
             }
             $update['dtr_mode']      = $data['dtr_mode'] ?? ($user->dtr_mode ?? 'two');
 
@@ -672,12 +744,37 @@ class AttendanceController extends Controller
                     return response()->json(['message' => 'The chosen supervisor is not a supervisor account.'], 422);
                 }
                 $update['supervisor_id'] = $sup ?: null;
+                // a new supervisor: the presentation rule of that HTE comes with it
+                if ($hasOutCol && (int) ($sup ?: 0) !== (int) ($user->supervisor_id ?? 0) && $sup) {
+                    $update['output_required'] = (bool) (DB::table('users')->where('id', $sup)->value('output_required') ?? true);
+                }
+            }
+            if ($hasOutCol) {
+                if ($request->has('prior_hours')) $update['prior_hours'] = round((float) ($data['prior_hours'] ?? 0), 2);
+                // the coordinator / admin can still change it for one intern
+                if ($request->has('output_required') && $data['output_required'] !== null && !isset($update['output_required'])) {
+                    $update['output_required'] = (bool) $data['output_required'];
+                }
             }
         }
 
+        // a supervisor: the modality of their HTE (given to the HTE's interns after the save)
+        $newHteMod = null;
+        if ($user->role === 'supervisor' && !empty($data['hte_modality']) && \App\Services\HteModality::ready()) {
+            $update['hte_modality'] = $newHteMod = $data['hte_modality'];
+        }
+        // a supervisor: the kind of HTE (empty clears it)
+        if ($user->role === 'supervisor' && $request->has('hte_category') && Schema::hasColumn('users', 'hte_category')) {
+            $update['hte_category'] = trim((string) ($data['hte_category'] ?? '')) ?: null;
+        }
+
         try {
-            DB::transaction(function () use ($id, $update, $isIntern, $uid) {
+            DB::transaction(function () use ($id, $update, $isIntern, $uid, $user) {
                 DB::table('users')->where('id', $id)->update($update);
+                // the HTE changed its rule: every intern under this supervisor follows it
+                if ($user->role === 'supervisor' && array_key_exists('output_required', $update)) {
+                    DB::table('users')->where('role', 'intern')->where('supervisor_id', $id)->update(['output_required' => $update['output_required']]);
+                }
 
                 // a new password signs the user out everywhere
                 if (isset($update['password']) && Schema::hasTable('api_tokens')) {
@@ -706,8 +803,19 @@ class AttendanceController extends Controller
             return response()->json(['message' => 'The changes could not be saved. Please try again.'], 500);
         }
 
+        // the HTE's modality reaches its interns (those with their own modality are kept)
+        $hteDone = null;
+        if ($newHteMod && !empty($update['placement'] ?? $user->placement)) {
+            $hteDone = \App\Services\HteModality::setForHte($update['placement'] ?? $user->placement, $newHteMod, true);
+        }
+        // an intern moved to another HTE / supervisor follows the new HTE (unless they have their own modality)
+        if ($isIntern && (array_key_exists('supervisor_id', $update) || array_key_exists('placement', $update))
+            && !array_key_exists('modality_custom', $update)) {
+            \App\Services\HteModality::applyToIntern((int) $id);
+        }
+
         return response()->json([
-            'message' => 'User updated.',
+            'message' => $hteDone && $hteDone['changed'] ? "User updated. {$hteDone['changed']} intern" . ($hteDone['changed'] === 1 ? '' : 's') . " now follow the HTE's modality." : 'User updated.',
             'name'    => $fullName,
         ]);
     }
@@ -804,8 +912,9 @@ class AttendanceController extends Controller
     }
 
     // ── Internship modality and scope (the OJT coordinator sets these) ─────────────────
-    // PATCH /api/coordinator/interns/{id}/placement   { modality?: onsite|hybrid|virtual|project, scope?: local|inbound|outbound }
-    // scope: local = CSU student at an HTE in the Philippines · inbound = a foreign student interning at CSU ·
+    // PATCH /api/coordinator/interns/{id}/placement   { modality?: onsite|hybrid|virtual|project, scope?: local|out_of_region|inbound|outbound }
+    // scope: local = CSU student at an HTE in the Caraga Region · out_of_region = at an HTE elsewhere in the Philippines ·
+    //        inbound = a foreign student interning at CSU ·
     //        outbound = a CSU student interning with a foreign HTE (abroad, or virtually for a foreign company)
     // A virtual intern has no kiosk, so their work mode becomes offsite (they log days through Submit Online);
     // an on-site intern goes back to onsite. Hybrid keeps whatever the day-to-day work mode is.
@@ -815,24 +924,31 @@ class AttendanceController extends Controller
             return response()->json(['message' => 'Run "php artisan migrate" on the server first.'], 500);
         }
         $data = $request->validate([
-            'modality' => 'nullable|in:onsite,hybrid,virtual,project',
-            'scope'    => 'nullable|in:local,inbound,outbound',
+            'modality' => 'nullable|in:onsite,hybrid,virtual,project,hte',
+            'scope'    => 'nullable|in:local,out_of_region,inbound,outbound',
         ]);
         $intern = DB::table('users')->where('id', $id)->where('role', 'intern')->first();
         if (!$intern) return response()->json(['message' => 'Intern not found.'], 404);
 
         $update = [];
         if (!empty($data['modality'])) {
+            // "hte" = follow the HTE again; any other value different from the HTE's is this intern's own (an exception)
+            $hteMod = \App\Services\HteModality::forIntern($intern);
+            if ($data['modality'] === 'hte') {
+                if (!$hteMod) return response()->json(['message' => "This intern's HTE has no modality set yet. Set it in Partner HTEs → HTEs & MOAs."], 422);
+                $data['modality'] = $hteMod;
+            }
             $update['modality'] = $data['modality'];
             if ($data['modality'] === 'virtual') $update['work_mode'] = 'offsite';
             if ($data['modality'] === 'onsite')  $update['work_mode'] = 'onsite';
+            if (\App\Services\HteModality::ready()) $update['modality_custom'] = $hteMod ? $data['modality'] !== $hteMod : false;
         }
         if (!empty($data['scope'])) $update['scope'] = $data['scope'];
         if (!$update) return response()->json(['message' => 'Nothing to change.'], 422);
         DB::table('users')->where('id', $id)->update($update);
 
         $labels = ['onsite' => 'On-site', 'hybrid' => 'Hybrid', 'virtual' => 'Virtual', 'project' => 'Project-based',
-                   'local' => 'Local', 'inbound' => 'Inbound (international)', 'outbound' => 'Outbound (international)'];
+                   'local' => 'Local', 'out_of_region' => 'Out-of-region', 'inbound' => 'Inbound (international)', 'outbound' => 'Outbound (international)'];
         $auth = $request->attributes->get('auth_user');
         try { Activity::record($auth, 'Changed internship modality / scope', $intern->name . ' → ' . implode(', ', array_map(fn ($v) => $labels[$v] ?? $v, array_intersect_key($update, ['modality' => 1, 'scope' => 1]))), $request); } catch (\Throwable $e) { /* best-effort */ }
         if (isset($update['modality']) && $update['modality'] !== ($intern->modality ?? 'onsite')) {
@@ -841,7 +957,80 @@ class AttendanceController extends Controller
                     'project' => 'project-based: log the days you worked on your project through Submit Online, or tap the kiosk when you are on site.'][$update['modality']];
             try { Notifier::toUser($intern->id, 'Internship Modality Updated', "Your internship is now {$how}", 'settings'); } catch (\Throwable $e) { /* best-effort */ }
         }
-        return response()->json(['message' => 'Saved.', 'work_mode' => $update['work_mode'] ?? $intern->work_mode]);
+        return response()->json(['message' => 'Saved.', 'work_mode' => $update['work_mode'] ?? $intern->work_mode,
+            'modality' => $update['modality'] ?? $intern->modality, 'modality_custom' => $update['modality_custom'] ?? ($intern->modality_custom ?? false)]);
+    }
+
+    // ── The kind of HTE ─────────────────────────────────────────────────────────────
+    // PATCH /api/coordinator/htes/category   { hte: "CCIS IT Faculty", category: "IT Company" | "" }
+    // Saved on the HTE's supervisor account(s); the HTE list and the Quarterly Report use it.
+    public function setHteCategory(Request $request)
+    {
+        if (!Schema::hasColumn('users', 'hte_category')) {
+            return response()->json(['message' => 'Run "php artisan migrate" on the server first.'], 500);
+        }
+        $data = $request->validate(['hte' => 'required|string|max:150', 'category' => 'nullable|string|max:60']);
+        $sups = \App\Services\HteModality::supervisorsOf($data['hte']);
+        if ($sups->isEmpty()) {
+            return response()->json(['message' => 'Add an HTE supervisor account for this HTE first (Add Accounts). The category is kept on it.'], 422);
+        }
+        $cat = trim((string) ($data['category'] ?? '')) ?: null;
+        DB::table('users')->whereIn('id', $sups->pluck('id')->all())->update(['hte_category' => $cat]);
+        return response()->json(['message' => $cat ? "{$data['hte']} is now listed as {$cat}." : 'Category cleared.']);
+    }
+
+    // ── Does the HTE require a System Output Presentation? ─────────────────────────────
+    // PATCH /api/coordinator/htes/output   { hte: "CCIS IT Faculty", required: true|false }
+    // Saved on the HTE's supervisor account(s) and on every intern at that HTE: interns of an HTE that doesn't
+    // require it no longer see "System Output Presentation" in their post-internship requirements.
+    public function setHteOutput(Request $request)
+    {
+        if (!\App\Services\SchemaCache::has('users', 'output_required')) {
+            return response()->json(['message' => 'Run "php artisan migrate" on the server first.'], 500);
+        }
+        $data = $request->validate(['hte' => 'required|string|max:150', 'required' => 'required|boolean']);
+        $req  = (bool) $data['required'];
+        $sups = \App\Services\HteModality::supervisorsOf($data['hte']);
+        $supIds = $sups->pluck('id')->map(fn ($v) => (int) $v)->all();
+        if ($supIds) DB::table('users')->whereIn('id', $supIds)->update(['output_required' => $req]);
+
+        $k = \App\Services\HteModality::key($data['hte']);
+        $ids = DB::table('users')->where('role', 'intern')->get(['id', 'placement', 'supervisor_id'])
+            ->filter(fn ($u) => in_array((int) $u->supervisor_id, $supIds, true) || \App\Services\HteModality::key($u->placement) === $k)
+            ->pluck('id')->all();
+        if ($ids) DB::table('users')->whereIn('id', $ids)->update(['output_required' => $req]);
+        if (!$supIds && !$ids) return response()->json(['message' => 'No HTE supervisor account or intern was found for this HTE.'], 404);
+
+        return response()->json(['message' => "{$data['hte']}: System Output Presentation is now " . ($req ? 'required' : 'not required')
+            . '. ' . count($ids) . ' intern' . (count($ids) === 1 ? '' : 's') . ' updated.']);
+    }
+
+    // ── One modality per HTE ────────────────────────────────────────────────────────
+    // PATCH /api/coordinator/htes/modality   { hte: "CCIS IT Faculty", modality: onsite|hybrid|virtual|project, skip_custom?: bool }
+    // Saved on the HTE's supervisor account(s); every intern at that HTE gets it
+    // (skip_custom = keep the interns the coordinator gave their own modality).
+    public function setHteModality(Request $request)
+    {
+        if (!\App\Services\HteModality::ready()) {
+            return response()->json(['message' => 'Run "php artisan migrate" on the server first.'], 500);
+        }
+        $data = $request->validate([
+            'hte'         => 'required|string|max:150',
+            'modality'    => 'required|in:onsite,hybrid,virtual,project',
+            'skip_custom' => 'nullable|boolean',
+        ]);
+        $r = \App\Services\HteModality::setForHte($data['hte'], $data['modality'], (bool) ($data['skip_custom'] ?? true));
+        if (!$r['supervisors'] && !$r['interns']) {
+            return response()->json(['message' => 'No HTE supervisor account or intern was found for this HTE.'], 404);
+        }
+        $labels = ['onsite' => 'On-site', 'hybrid' => 'Hybrid', 'virtual' => 'Virtual', 'project' => 'Project-based'];
+        $auth = $request->attributes->get('auth_user');
+        try { Activity::record($auth, 'Set an HTE modality', "{$data['hte']} → {$labels[$data['modality']]}", $request); } catch (\Throwable $e) { /* best-effort */ }
+        $msg = "{$data['hte']} is now {$labels[$data['modality']]}."
+            . ($r['changed'] ? " {$r['changed']} intern" . ($r['changed'] === 1 ? ' was' : 's were') . ' updated and notified.' : '')
+            . ($r['skipped'] ? " {$r['skipped']} with their own modality kept it." : '')
+            . (!$r['supervisors'] ? ' Add an HTE supervisor account for this HTE so new interns get it automatically.' : '');
+        return response()->json(['message' => $msg] + $r);
     }
 
     // ── Assign (or remove) an intern's HTE supervisor ─────────────────────────────────
@@ -875,6 +1064,12 @@ class AttendanceController extends Controller
             'supervisor_id' => $supId,
             'updated_at'    => Carbon::now('Asia/Manila'),
         ]);
+        if ($sup && \App\Services\SchemaCache::has('users', 'output_required')) {
+            // the presentation rule of the new supervisor's HTE comes with it
+            DB::table('users')->where('id', $id)->update(['output_required' => (bool) ($sup->output_required ?? true)]);
+        }
+        // and so does the HTE's modality (unless the intern has their own)
+        if ($sup) \App\Services\HteModality::applyToIntern((int) $id);
 
         if ($sup) {
             Notifier::toUser($intern->id, 'HTE Supervisor Assigned',

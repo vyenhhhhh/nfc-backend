@@ -69,9 +69,13 @@ class FileController extends Controller
 
         switch ($folder) {
             case 'movs':
-                $owner = DB::table('movs')->where('file_path', $path)->value('user_id');
-                if ($owner === null) return false;
-                return (int) $owner === $me || $role === 'ojt_coordinator';
+                $mov = DB::table('movs')->where('file_path', $path)->first(['user_id', 'requirement']);
+                if (!$mov) return false;
+                if ((int) $mov->user_id === $me || $role === 'ojt_coordinator') return true;
+                // an HTE supervisor: only the documents they fill in or sign, and only for their own interns
+                return $role === 'supervisor'
+                    && in_array($mov->requirement, Supervision::SUPERVISOR_DOCS, true)
+                    && Supervision::supervises($auth, $mov->user_id);
 
             case 'evaluations':
                 $e = DB::table('evaluations')->where('file_path', $path)->first(['intern_id', 'evaluator_id']);

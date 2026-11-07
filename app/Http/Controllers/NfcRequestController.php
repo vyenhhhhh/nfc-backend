@@ -107,7 +107,7 @@ class NfcRequestController extends Controller
             ->get();
 
         // open cards: how many pre-internship requirements are still missing (a card can't be claimed until it's 0)
-        $total = count(config('ojt.pre_requirements', []));
+        $total = count(\App\Services\Requirements::preKeys());
         foreach ($rows as $r) {
             if ($r->status === 'approved') {
                 $r->pre_missing = count(Supervision::missingPreRequirements($r->user_id));
@@ -185,11 +185,9 @@ class NfcRequestController extends Controller
 
         $uid = strtoupper(trim($data['uid'] ?? ''));
         if ($uid !== '') {
-            // the same card can be written several ways (E2864A4A, its reverse, or the old reader's number 1246398178):
-            // any of them already linked to someone else counts as taken
-            $variants = \App\Services\CardSecurity::uidVariants($uid);
-            $taken = \App\Services\CardSecurity::uidTakenByOther($uid, (int) $req->user_id)
-                || DB::table('nfc_requests')->whereIn(DB::raw('UPPER(uid)'), $variants)->where('status', 'approved')->where('id', '!=', $id)->exists();
+            \App\Services\CardSecurity::dropOrphans();   // a card of a deleted account is free again
+            $taken = DB::table('nfc_cards')->where('uid', $uid)->where('user_id', '!=', $req->user_id)->exists()
+                || DB::table('nfc_requests')->where('uid', $uid)->where('status', 'approved')->where('id', '!=', $id)->exists();
             if ($taken) {
                 return response()->json(['message' => 'That card is already linked to another intern.'], 422);
             }
@@ -215,7 +213,8 @@ class NfcRequestController extends Controller
         if ($req->status !== 'approved' || empty($req->printed_at) || empty($req->uid)) {
             return response()->json(['message' => 'Link the card first, then mark it as claimed.'], 422);
         }
-        $taken = \App\Services\CardSecurity::uidTakenByOther((string) $req->uid, (int) $req->user_id);
+        \App\Services\CardSecurity::dropOrphans();
+        $taken = DB::table('nfc_cards')->where('uid', $req->uid)->where('user_id', '!=', $req->user_id)->exists();
         if ($taken) {
             return response()->json(['message' => 'That card is already linked to another intern. Link a different card.'], 422);
         }
@@ -224,7 +223,7 @@ class NfcRequestController extends Controller
         // every pre-internship requirement is approved
         $missing = count(Supervision::missingPreRequirements($req->user_id));
         if ($missing > 0) {
-            $total = count(config('ojt.pre_requirements', []));
+            $total = count(\App\Services\Requirements::preKeys());
             return response()->json([
                 'message' => "This intern can't claim the card yet: {$missing} of {$total} pre-internship requirements are not approved.",
             ], 422);

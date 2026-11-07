@@ -19,7 +19,7 @@ class Activity
     public static function record(?object $user, string $action, ?string $details = null, ?Request $request = null): void
     {
         try {
-            if (self::$ready === null) self::$ready = Schema::hasTable('activity_logs');
+            if (self::$ready === null) self::$ready = SchemaCache::has('activity_logs');
             if (!self::$ready) return;
             DB::table('activity_logs')->insert([
                 'user_id'    => $user->id ?? null,

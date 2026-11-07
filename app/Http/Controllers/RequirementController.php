@@ -118,16 +118,18 @@ class RequirementController extends Controller
         if ($scope !== null && !in_array((int) $id, $scope, true)) {
             return response()->json(['message' => 'Intern not found.'], 404);
         }
-        // only the OJT coordinator may open the files the intern uploaded;
-        // admin and HTE supervisors see the status only (no file link is sent to them)
-        $cols = ['id', 'requirement', 'phase', 'status', 'remarks', 'title', 'report_id', 'created_at', 'updated_at'];
-        if ($auth && $auth->role === 'ojt_coordinator') {
-            $cols[] = 'file_path';
-            $cols[] = 'original_name';
-        }
-        return response()->json(
-            DB::table('movs')->where('user_id', $id)->orderByDesc('id')->get($cols)
-        );
+        // the OJT coordinator may open every file the intern uploaded;
+        // an HTE supervisor only the documents they fill in or sign (Supervision::SUPERVISOR_DOCS);
+        // the admin sees the status only (no file link is sent)
+        $cols = ['id', 'requirement', 'phase', 'status', 'remarks', 'title', 'report_id', 'created_at', 'updated_at', 'file_path', 'original_name'];
+        $role = $auth->role ?? '';
+        $rows = DB::table('movs')->where('user_id', $id)->orderByDesc('id')->get($cols);
+        return response()->json($rows->map(function ($m) use ($role) {
+            $mayOpen = $role === 'ojt_coordinator'
+                || ($role === 'supervisor' && in_array($m->requirement, \App\Services\Supervision::SUPERVISOR_DOCS, true));
+            if (!$mayOpen) { unset($m->file_path, $m->original_name); }
+            return $m;
+        })->values());
     }
 
     // GET /api/coordinator/requirement-deadlines/missing  -> { "pre:moa": 3, ... } how many interns still lack each one
@@ -142,7 +144,7 @@ class RequirementController extends Controller
         }
         if (!$wanted) return response()->json([]);
 
-        $interns = DB::table('users')->where('role', 'intern')->get(['id', 'program', 'tracking_type']);
+        $interns = DB::table('users')->where('role', 'intern')->get(array_merge(\App\Services\SchemaCache::has('users', 'prior_hours') ? ['id', 'program', 'tracking_type', 'prior_hours'] : ['id', 'program', 'tracking_type'], \App\Services\OjtCompletion::columns()));
         $weekAgo = Carbon::now('Asia/Manila')->subDays(7);
 
         // who already sent each requirement (pending or approved)
@@ -161,7 +163,7 @@ class RequirementController extends Controller
         $postOpen = [];
         if (in_array('post', array_column($wanted, 0), true)) {
             foreach ($interns as $u) {
-                $postOpen[(int) $u->id] = OjtHours::rendered((int) $u->id) + 0.0001 >= $this->requiredHours($u->program);
+                $postOpen[(int) $u->id] = \App\Services\OjtCompletion::done($u, OjtHours::rendered((int) $u->id), $this->requiredHours($u->program, $u->prior_hours ?? 0));
             }
         }
 
@@ -190,7 +192,7 @@ class RequirementController extends Controller
         if (!config('ojt.require_pre_requirements', true)) {
             return DB::table('users')->where('role', 'intern')->pluck('id')->map(fn ($i) => (int) $i)->flip()->all();
         }
-        $required = config('ojt.pre_requirements', []);
+        $required = \App\Services\Requirements::preKeys();
         return DB::table('movs')
             ->whereIn('requirement', $required)
             ->where(function ($q) { $q->where('phase', 'pre')->orWhereNull('phase'); })
@@ -205,7 +207,7 @@ class RequirementController extends Controller
     /** Interns who have not submitted this requirement (pending or approved). */
     private function missingInterns(string $requirement, string $phase): array
     {
-        $interns = DB::table('users')->where('role', 'intern')->get(['id', 'program', 'tracking_type']);
+        $interns = DB::table('users')->where('role', 'intern')->get(array_merge(\App\Services\SchemaCache::has('users', 'prior_hours') ? ['id', 'program', 'tracking_type', 'prior_hours'] : ['id', 'program', 'tracking_type'], \App\Services\OjtCompletion::columns()));
 
         $q = DB::table('movs')
             ->where('requirement', $requirement)
@@ -225,7 +227,7 @@ class RequirementController extends Controller
             if ($phase !== 'pre' && !isset($started[(int) $u->id])) continue;
             // post-internship requirements only open after the required hours are done
             if ($phase === 'post'
-                && OjtHours::rendered((int) $u->id) + 0.0001 < $this->requiredHours($u->program)) {
+                && !\App\Services\OjtCompletion::done($u, OjtHours::rendered((int) $u->id), $this->requiredHours($u->program, $u->prior_hours ?? 0))) {
                 continue;
             }
             $out[] = (int) $u->id;
@@ -233,7 +235,7 @@ class RequirementController extends Controller
         return $out;
     }
 
-    private function requiredHours(?string $program): float
+    private function requiredHours(?string $program, $prior = 0): float
     {
         $p = strtoupper((string) $program);
         $key = null;
@@ -241,6 +243,7 @@ class RequirementController extends Controller
         elseif (preg_match('/BSIS|INFORMATION\s+SYS/', $p)) $key = 'BSIS';
         elseif (preg_match('/BSCS|COMPUTER\s+SCI/', $p)) $key = 'BSCS';
 
-        return (float) (config('ojt.program_hours')[$key] ?? config('ojt.default_hours', 486));
+        // hours already rendered in an earlier term are taken off
+        return max(0.0, (float) (config('ojt.program_hours')[$key] ?? config('ojt.default_hours', 486)) - (float) $prior);
     }
 }

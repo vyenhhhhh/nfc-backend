@@ -25,13 +25,15 @@ class LiveController extends Controller
         'dtr_certifications', 'requirement_deadlines',
         'evaluations', 'intern_grades', 'school_event_excuses', 'report_schedules',
         'card_flags', 'requirement_templates',
+        'requirement_form_notes',   // notes / "no form needed" on Forms and templates
+        'requirement_defs',         // the coordinator's list of requirements
     ];
 
     public function show()
     {
         // which of those tables exist (and their columns) - checked once an hour, not on every call
         // (change the name when TABLES changes, so the new list is used right away)
-        $tables = Cache::remember('live_tables_v4', 3600, function () {
+        $tables = Cache::remember('live_tables_v5', 3600, function () {
             $found = [];
             foreach (self::TABLES as $t) {
                 if (!Schema::hasTable($t)) continue;

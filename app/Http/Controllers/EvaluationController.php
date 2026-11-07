@@ -57,6 +57,10 @@ class EvaluationController extends Controller
     {
         if (!Schema::hasTable('evaluations')) return response()->json(['ready' => false, 'evaluations' => []]);
         $auth = $this->auth($request);
+        // the appraisals are part of the grade: not for the admin (only the HTE supervisor and the OJT coordinator)
+        if (($auth->role ?? '') === 'admin') {
+            return response()->json(['message' => 'Appraisals are handled by the OJT coordinator and the HTE supervisors.'], 403);
+        }
         $q = DB::table('evaluations as e')->join('users as u', 'u.id', '=', 'e.intern_id')->select('e.*', 'u.name as intern_name', 'u.supervisor_id');
         if ($auth->role === 'supervisor') $q->where('u.supervisor_id', $auth->id);
         return response()->json(['ready' => true, 'evaluations' => $q->orderByDesc('e.updated_at')->get()->map(fn ($e) => self::row($e) + ['intern_name' => $e->intern_name])]);

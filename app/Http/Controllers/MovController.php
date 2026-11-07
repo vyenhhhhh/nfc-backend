@@ -25,6 +25,8 @@ class MovController extends Controller
 
         $phase       = $request->input('phase', 'pre');
         $requirement = $request->input('requirement') ?: 'others';
+        // a weekly / monthly report is always a during-internship document (checked below like the others)
+        if ($request->filled('report_id')) $phase = 'during';
 
         // During-internship documents open only when the internship has started
         // (every pre-internship requirement approved by the coordinator)
@@ -37,8 +39,15 @@ class MovController extends Controller
         // Post-internship documents open only after the required hours are done
         if ($phase === 'post') {
             $u = DB::table('users')->where('id', $request->user_id)->first();
-            if ($u) {   // every intern renders the required hours of their program
-                $required = $this->requiredHours($u->program ?? null);
+            if ($u && \App\Services\OjtCompletion::isProject($u)) {
+                // project-based: done when the project is confirmed complete, not by hours
+                if (!\App\Services\OjtCompletion::projectDone($u)) {
+                    return response()->json([
+                        'message' => 'Post-internship requirements unlock once your HTE supervisor marks your project as complete and the OJT coordinator confirms it.',
+                    ], 403);
+                }
+            } elseif ($u) {   // on-site, hybrid, virtual: the required hours of their program
+                $required = $this->requiredHours($u->program ?? null, $u->prior_hours ?? 0);
                 $rendered = $this->renderedHours((int) $request->user_id);
                 if ($rendered + 0.0001 < $required) {
                     return response()->json([
@@ -238,7 +247,7 @@ class MovController extends Controller
     }
 
     // Required hours for a program such as "BSIT - 4" (set in config/ojt.php)
-    private function requiredHours(?string $program): float
+    private function requiredHours(?string $program, $prior = 0): float
     {
         $p = strtoupper((string) $program);
         $key = null;
@@ -246,7 +255,8 @@ class MovController extends Controller
         elseif (preg_match('/BSIS|INFORMATION\s+SYS/', $p)) $key = 'BSIS';
         elseif (preg_match('/BSCS|COMPUTER\s+SCI/', $p)) $key = 'BSCS';
 
-        return (float) (config('ojt.program_hours')[$key] ?? config('ojt.default_hours', 486));
+        // hours already rendered in an earlier term are taken off
+        return max(0.0, (float) (config('ojt.program_hours')[$key] ?? config('ojt.default_hours', 486)) - (float) $prior);
     }
 
     // Same rule as the dashboard (see app/Services/OjtHours.php)

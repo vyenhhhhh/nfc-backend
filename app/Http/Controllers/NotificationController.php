@@ -10,7 +10,10 @@ class NotificationController extends Controller
     // GET /api/notifications  -> the signed-in user's own, newest first, last 50
     public function index(Request $request)
     {
-        $uid = $request->attributes->get('auth_user')->id;
+        $auth = $request->attributes->get('auth_user');
+        $uid = $auth->id;
+        // the coordinator: remind once when a quarter ends that its report is ready to review
+        if (($auth->role ?? null) === 'ojt_coordinator') \App\Services\QuarterlyReminder::check((int) $uid);
 
         $rows = DB::table('notifications')
             ->where('user_id', $uid)

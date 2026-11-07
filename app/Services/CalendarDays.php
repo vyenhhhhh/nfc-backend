@@ -15,7 +15,7 @@ class CalendarDays
     public static function ready(): bool
     {
         static $ok = null;
-        return $ok ??= Schema::hasColumn('calendar_events', 'hte_key');
+        return $ok ??= SchemaCache::has('calendar_events', 'hte_key');
     }
 
     /** "DICT  Caraga " -> "dict caraga" (same matching as the HTE kiosks) */

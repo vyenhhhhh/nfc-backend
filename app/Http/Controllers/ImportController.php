@@ -76,6 +76,7 @@ class ImportController extends Controller
                 'last_name'   => self::clean($r['last_name'] ?? ''),
                 'first_name'  => self::clean($r['first_name'] ?? ''),
                 'middle_name' => self::clean($r['middle_name'] ?? ''),
+                'name_extension' => self::clean($r['name_extension'] ?? ''),
                 'email'       => strtolower(self::clean($r['email'] ?? '')),
                 'program'     => self::program($r['program'] ?? ''),
                 'semester'    => self::semester($r['semester'] ?? ''),
@@ -95,7 +96,7 @@ class ImportController extends Controller
             if (!$d['semester']) $err[] = 'Semester must be 1st or 2nd';
             if (!$d['date_of_birth']) $err[] = 'Birthday is missing or not a date';
             elseif ($d['date_of_birth'] >= Carbon::today()->toDateString()) $err[] = 'Birthday must be in the past';
-            foreach (['last_name' => 100, 'first_name' => 100, 'middle_name' => 100, 'student_id' => 50, 'contact_number' => 20, 'placement' => 150,
+            foreach (['last_name' => 100, 'first_name' => 100, 'middle_name' => 100, 'name_extension' => 20, 'student_id' => 50, 'contact_number' => 20, 'placement' => 150,
                       'emergency_contact_name' => 150, 'emergency_contact_relation' => 60, 'emergency_contact_number' => 20] as $k => $max) {
                 if (mb_strlen($d[$k]) > $max) $err[] = "Too long: {$k}";
             }
@@ -155,10 +156,10 @@ class ImportController extends Controller
             if ($x['errors']) { $skipped[] = ['row' => $x['row'], 'name' => trim($x['data']['first_name'] . ' ' . $x['data']['last_name']), 'errors' => $x['errors']]; continue; }
             $d    = $x['data'];
             $pass = self::tempPassword();
-            $name = trim(implode(' ', array_filter([$d['first_name'], $d['middle_name'], $d['last_name']])));
+            $name = trim(implode(' ', array_filter([$d['first_name'], $d['middle_name'], $d['last_name'], $d['name_extension']])));
             try {
                 $id = DB::table('users')->insertGetId(array_merge([
-                    'name' => $name, 'first_name' => $d['first_name'], 'middle_name' => $d['middle_name'] ?: null, 'last_name' => $d['last_name'],
+                    'name' => $name, 'first_name' => $d['first_name'], 'middle_name' => $d['middle_name'] ?: null, 'last_name' => $d['last_name'], 'name_extension' => $d['name_extension'] ?: null,
                     'email' => $d['email'], 'student_id' => $d['student_id'], 'contact_number' => $d['contact_number'] ?: null,
                     'date_of_birth' => $d['date_of_birth'], 'placement' => $d['placement'] ?: null,
                     'semester' => $d['semester'], 'program' => $d['program'], 'college' => 'CCIS',

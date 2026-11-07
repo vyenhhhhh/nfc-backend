@@ -1,5 +1,5 @@
 <?php
-
+//2026_10_08_170939_create_notifications_and_announcements_tables.php
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;

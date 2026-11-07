@@ -64,7 +64,7 @@ class CardSecurityController extends Controller
             ($intern->name ?? 'Unknown card') . " · UID {$flag->uid}", $request);
 
         return response()->json(['message' => $data['action'] === 'reset'
-            ? 'Done. The card will get a new code on its next tap at a phone or ACR122U kiosk.'
+            ? 'Done. The card will get a new code on its next tap at a phone or ACR122Ugit add . kiosk.'
             : 'Alert dismissed.']);
     }
 }

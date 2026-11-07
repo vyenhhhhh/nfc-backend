@@ -125,6 +125,8 @@ class AuthController extends Controller
             'modality'      => $user->modality ?? 'onsite',
             'scope'         => $user->scope ?? 'local',
             'dtr_mode'      => $user->dtr_mode ?? 'two',
+            'output_required' => (bool) ($user->output_required ?? true),
+            'prior_hours'   => (float) ($user->prior_hours ?? 0),
             'has_card'      => $hasCard,
             'must_change_password' => (bool) ($user->must_change_password ?? false),
             'token'         => $token,

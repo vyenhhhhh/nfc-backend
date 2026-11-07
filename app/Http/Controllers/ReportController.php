@@ -33,6 +33,20 @@ class ReportController extends Controller
         return is_array($v) ? array_values($v) : [];
     }
 
+    // HTE names are compared without extra spaces and without caring about capitals
+    private static function hteKey(?string $name): string
+    {
+        return mb_strtolower(trim(preg_replace('/\s+/', ' ', (string) $name)));
+    }
+
+    // "By HTE" needs the htes column (php artisan migrate)
+    private static function hasHtes(): bool
+    {
+        static $has = null;
+        if ($has === null) $has = \Illuminate\Support\Facades\Schema::hasColumn('report_schedules', 'htes');
+        return $has;
+    }
+
     // the report as the frontend sees it (programs / intern_ids as arrays)
     private static function shape($r): array
     {
@@ -43,6 +57,7 @@ class ReportController extends Controller
             'audience'   => $r->audience ?: 'all',
             'programs'   => self::decode($r->programs),
             'intern_ids' => array_map('intval', self::decode($r->intern_ids)),
+            'htes'       => self::decode($r->htes ?? null),
             'created_at' => $r->created_at,
         ];
     }
@@ -53,13 +68,14 @@ class ReportController extends Controller
         $aud = $r->audience ?: 'all';
         if ($aud === 'programs') return in_array(self::programKey($intern->program ?? null), self::decode($r->programs), true);
         if ($aud === 'interns')  return in_array((int) $intern->id, array_map('intval', self::decode($r->intern_ids)), true);
+        if ($aud === 'htes')     return in_array(self::hteKey($intern->placement ?? null), array_map([self::class, 'hteKey'], self::decode($r->htes ?? null)), true);
         return true;
     }
 
     // ids of the interns the report is for
     private static function targets($r): array
     {
-        $interns = DB::table('users')->where('role', 'intern')->get(['id', 'program']);
+        $interns = DB::table('users')->where('role', 'intern')->get(['id', 'program', 'placement']);
         return $interns->filter(fn ($u) => self::appliesTo($r, $u))->pluck('id')->map(fn ($v) => (int) $v)->values()->all();
     }
 
@@ -81,7 +97,7 @@ class ReportController extends Controller
             ->orderByRaw('due_date IS NULL, due_date')->orderBy('id')->get();
 
         if ($auth && $auth->role === 'intern') {
-            $me = DB::table('users')->where('id', $auth->id)->first(['id', 'program']);
+            $me = DB::table('users')->where('id', $auth->id)->first(['id', 'program', 'placement']);
             return response()->json($rows->filter(fn ($r) => $me && self::appliesTo($r, $me))->map(fn ($r) => self::shape($r))->values());
         }
 
@@ -99,11 +115,13 @@ class ReportController extends Controller
         $data = $request->validate([
             'title'        => 'required|string|max:150',
             'due_date'     => 'nullable|date',
-            'audience'     => 'required|in:all,programs,interns',
+            'audience'     => 'required|in:all,programs,interns,htes',
             'programs'     => 'nullable|array',
             'programs.*'   => 'in:' . implode(',', self::PROGRAMS),
             'intern_ids'   => 'nullable|array',
             'intern_ids.*' => 'integer',
+            'htes'         => 'nullable|array',
+            'htes.*'       => 'string|max:150',
         ]);
         if ($data['audience'] === 'programs' && empty($data['programs'])) {
             abort(response()->json(['message' => 'Pick at least one program.'], 422));
@@ -111,13 +129,21 @@ class ReportController extends Controller
         if ($data['audience'] === 'interns' && empty($data['intern_ids'])) {
             abort(response()->json(['message' => 'Pick at least one intern.'], 422));
         }
-        return [
+        if ($data['audience'] === 'htes') {
+            if (!self::hasHtes()) abort(response()->json(['message' => '"By HTE" is not set up yet. Run php artisan migrate on the server.'], 500));
+            if (empty($data['htes'])) abort(response()->json(['message' => 'Pick at least one HTE.'], 422));
+        }
+        $out = [
             'title'      => trim($data['title']),
             'due_date'   => $data['due_date'] ?? null,
             'audience'   => $data['audience'],
             'programs'   => $data['audience'] === 'programs' ? json_encode(array_values(array_unique($data['programs']))) : null,
             'intern_ids' => $data['audience'] === 'interns' ? json_encode(array_values(array_unique(array_map('intval', $data['intern_ids'])))) : null,
         ];
+        if (self::hasHtes()) {
+            $out['htes'] = $data['audience'] === 'htes' ? json_encode(array_values(array_unique(array_map('trim', $data['htes'])))) : null;
+        }
+        return $out;
     }
 
     private static function dueText($due): string
@@ -214,7 +240,7 @@ class ReportController extends Controller
     public static function allowsIntern($reportId, $internId): ?object
     {
         $r = DB::table('report_schedules')->where('id', $reportId)->first();
-        $u = DB::table('users')->where('id', $internId)->first(['id', 'program']);
+        $u = DB::table('users')->where('id', $internId)->first(['id', 'program', 'placement']);   // placement: reports asked "By HTE"
         return ($r && $u && self::appliesTo($r, $u)) ? $r : null;
     }
 }

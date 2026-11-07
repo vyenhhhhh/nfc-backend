@@ -6,6 +6,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\OnlineSubmissionController;
 use App\Http\Controllers\MovController;
 use App\Http\Controllers\RequirementTemplateController;
+use App\Http\Controllers\RequirementDefController;
 use App\Http\Controllers\NfcRequestController;
 use App\Http\Controllers\CalendarController;
 use App\Http\Controllers\NotificationController;
@@ -20,6 +21,7 @@ use App\Http\Controllers\RequirementController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\AnnouncementHistoryController;
 use App\Http\Controllers\AccountController;
+use App\Http\Controllers\ProjectController;
 use App\Http\Controllers\CardSecurityController;
 use App\Http\Controllers\BackupController;
 use App\Http\Controllers\QuarterlyReportController;
@@ -65,10 +67,12 @@ Route::middleware($anyUser)->group(function () {
     Route::get('/my-grade', [GradeController::class, 'mine']);             // intern: the internship grade, once released
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me',      [AuthController::class, 'me']);
+    Route::get('/requirements', [RequirementDefController::class, 'index']);   // the internship requirements (the coordinator manages them)
 
     // open an uploaded file: private ones (requirements, proofs, signatures) get a link that works for a few minutes,
     // and only for the people who may see them (app/Http/Controllers/FileController.php)
     Route::get('/files/link', [FileController::class, 'link'])->middleware('throttle:120,1');
+    Route::get('/interns/{id}/project', [ProjectController::class, 'show'])->whereNumber('id');   // project status (project-based interns)
 
     // live dashboards: "has anything changed?" (a tiny fingerprint, asked every few seconds)
     Route::get('/live', [LiveController::class, 'show']);
@@ -149,6 +153,11 @@ Route::middleware($staff)->group(function () {
     Route::patch('/users/{id}/settings', [AttendanceController::class, 'updateSettings']);
     // DTR type (2 or 4 taps): the HTE decides, so the intern's supervisor sets it (admin / coordinator can too)
     Route::patch('/supervisor/interns/{id}/dtr-mode', [AccountController::class, 'setDtrMode']);
+    // project-based interns: the supervisor marks the project complete, then the coordinator confirms it
+    Route::post('/interns/{id}/project/mark',      [ProjectController::class, 'mark'])->whereNumber('id');
+    Route::delete('/interns/{id}/project/mark',    [ProjectController::class, 'unmark'])->whereNumber('id');
+    Route::post('/interns/{id}/project/confirm',   [ProjectController::class, 'confirm'])->whereNumber('id');
+    Route::delete('/interns/{id}/project/confirm', [ProjectController::class, 'unconfirm'])->whereNumber('id');
 
     // an intern's requirement checklist (shown in their profile under Interns)
     Route::get('/staff/interns/{id}/requirements', [RequirementController::class, 'internRequirements']);
@@ -199,8 +208,11 @@ Route::middleware($coordinator)->group(function () {
 
     // assign an intern's HTE supervisor (from the OJT coordinator: this is her job)
     Route::patch('/coordinator/interns/{id}/supervisor', [AttendanceController::class, 'assignSupervisor']);
-    // internship modality (on-site / hybrid / virtual) and scope (local / inbound / outbound)
+    // internship modality (on-site / hybrid / virtual) and scope (local / out-of-region / inbound / outbound)
     Route::patch('/coordinator/interns/{id}/placement', [AttendanceController::class, 'setPlacement']);
+    Route::patch('/coordinator/htes/modality', [AttendanceController::class, 'setHteModality']);   // one modality per HTE → its supervisor and interns
+    Route::patch('/coordinator/htes/category', [AttendanceController::class, 'setHteCategory']);   // the kind of HTE (IT Company, Hospital, ...)
+    Route::patch('/coordinator/htes/output', [AttendanceController::class, 'setHteOutput']);       // does the HTE require a System Output Presentation?
 
     // holidays / non-working days on the calendar (the OJT coordinator sets these; the admin can too)
     Route::post('/calendar',        [CalendarController::class, 'store']);
@@ -212,6 +224,13 @@ Route::middleware($coordinator)->group(function () {
     Route::post('/admin/users',                [AttendanceController::class, 'addUser']);
     Route::post('/admin/users/import/preview', [ImportController::class, 'preview']);
     Route::post('/admin/users/import',         [ImportController::class, 'import']);
+
+    // the list of requirements: add, rename, describe, move, order, remove (removed = hidden, files are kept)
+    Route::get('/coordinator/requirements',            [RequirementDefController::class, 'all']);
+    Route::post('/coordinator/requirements',           [RequirementDefController::class, 'store']);
+    Route::post('/coordinator/requirements/order',     [RequirementDefController::class, 'order']);
+    Route::put('/coordinator/requirements/{id}',       [RequirementDefController::class, 'update'])->whereNumber('id');
+    Route::delete('/coordinator/requirements/{id}',    [RequirementDefController::class, 'destroy'])->whereNumber('id');
 
     // blank forms for the requirements (interns download them; the coordinator uploads them)
     Route::post('/coordinator/requirement-templates',        [RequirementTemplateController::class, 'store']);

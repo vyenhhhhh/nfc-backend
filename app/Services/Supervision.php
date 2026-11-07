@@ -1,5 +1,5 @@
 <?php
-
+//Supervision.php
 namespace App\Services;
 
 use Illuminate\Support\Facades\DB;
@@ -31,6 +31,12 @@ class Supervision
             && DB::table('users')->where('id', $internId)->where('supervisor_id', $auth->id)->exists();
     }
 
+    /**
+     * Requirement files an HTE supervisor may open (for their own interns only): the documents they fill in or sign.
+     * Everything else (medical certificate, parents' consent, contract, ...) stays with the OJT coordinator.
+     */
+    public const SUPERVISOR_DOCS = ['supervisor_feedback_form', 'performance_appraisal', 'evaluation_forms'];
+
     /** The intern's supervisor id, or null if none is assigned yet. */
     public static function supervisorOf($internId): ?int
     {
@@ -46,7 +52,7 @@ class Supervision
     {
         if (!config('ojt.require_pre_requirements', true)) return [];
 
-        $required = config('ojt.pre_requirements', []);
+        $required = Requirements::preKeys();   // the coordinator's current pre-internship list
         $approved = DB::table('movs')
             ->where('user_id', $internId)
             ->whereIn('requirement', $required)

@@ -45,19 +45,24 @@ class GradeController extends Controller
         return ['days' => count($days), 'late' => $late];
     }
 
-    private static function requiredHours(?string $program): float
+    private static function requiredHours(?string $program, $prior = 0): float
     {
         $p = strtoupper((string) $program); $key = null;
         if (preg_match('/BSIT|INFORMATION\s+TECH/', $p)) $key = 'BSIT';
         elseif (preg_match('/BSIS|INFORMATION\s+SYS/', $p)) $key = 'BSIS';
         elseif (preg_match('/BSCS|COMPUTER\s+SCI/', $p)) $key = 'BSCS';
-        return (float) (config('ojt.program_hours')[$key] ?? config('ojt.default_hours', 486));
+        // hours already rendered in an earlier term are taken off
+        return max(0.0, (float) (config('ojt.program_hours')[$key] ?? config('ojt.default_hours', 486)) - (float) $prior);
     }
 
     // GET /api/grades   (coordinator / admin: every intern · supervisor: their own interns)
     public function index(Request $request)
     {
         $auth = $this->auth($request);
+        // grades are academic records: only the people who grade see them (the HTE supervisor and the OJT coordinator)
+        if (($auth->role ?? '') === 'admin') {
+            return response()->json(['message' => 'Internship grades are handled by the OJT coordinator and the HTE supervisors.'], 403);
+        }
         $ready = Schema::hasTable('intern_grades') && Schema::hasTable('evaluations');
         $q = DB::table('users')->where('role', 'intern');
         if ($auth->role === 'supervisor') $q->where('supervisor_id', $auth->id);
@@ -67,6 +72,9 @@ class GradeController extends Controller
         $evals = Schema::hasTable('evaluations') ? DB::table('evaluations')->whereIn('intern_id', $ids)->get()->keyBy('intern_id') : collect();
         $grades = Schema::hasTable('intern_grades') ? DB::table('intern_grades')->whereIn('intern_id', $ids)->get()->keyBy('intern_id') : collect();
         $sups = DB::table('users')->whereIn('id', $interns->pluck('supervisor_id')->filter()->unique()->all())->pluck('name', 'id');
+        // the HTE's address (on the supervisor's account) for "Address of Company" on form F-OSIP-PAR-004
+        $supAddr = \App\Services\SchemaCache::has('users', 'hte_address')
+            ? DB::table('users')->whereIn('id', $interns->pluck('supervisor_id')->filter()->unique()->all())->pluck('hte_address', 'id') : collect();
 
         $docs = [];
         if ($auth->role !== 'supervisor' && Schema::hasTable('movs')) {
@@ -84,7 +92,8 @@ class GradeController extends Controller
                 'id' => (int) $u->id, 'name' => $u->name, 'student_id' => $u->student_id ?? null, 'program' => $u->program ?? null,
                 'placement' => $u->placement ?? null, 'photo' => $u->photo ?? null, 'semester' => $u->semester ?? null, 'tracking_type' => $u->tracking_type ?? 'hours',
                 'supervisor_id' => $u->supervisor_id ? (int) $u->supervisor_id : null, 'supervisor_name' => $u->supervisor_id ? ($sups[$u->supervisor_id] ?? null) : null,
-                'hours' => round(OjtHours::rendered((int) $u->id), 2), 'required_hours' => self::requiredHours($u->program ?? null),
+                'hte_address' => $u->supervisor_id ? ($supAddr[$u->supervisor_id] ?? null) : null,
+                'hours' => round(OjtHours::rendered((int) $u->id), 2), 'required_hours' => self::requiredHours($u->program ?? null, $u->prior_hours ?? 0),
                 'attendance' => self::attendance((int) $u->id),
                 'appraisal' => $e && $e->mode === 'system' ? [
                     'id' => (int) $e->id, 'ratings' => json_decode($e->ratings ?: '{}', true), 'score' => $sup['total'], 'categories' => $sup['categories'],
