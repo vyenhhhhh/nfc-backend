@@ -51,7 +51,8 @@ Route::post('/login/google', [AuthController::class, 'googleLogin'])->middleware
 // but stops anyone from flooding the kiosk route (saved offline taps are sent one by one).
 Route::post('/tap',   [AttendanceController::class, 'tap'])->middleware('throttle:240,1');
 Route::post('/tap/confirm', [AttendanceController::class, 'confirmCardWrite'])->middleware('throttle:240,1');   // phone / ACR122U kiosk wrote the new card code
-Route::get('/kiosk/info', [AccountController::class, 'kioskInfo'])->middleware('throttle:30,1');   // kiosk screen: its name + who can tap
+Route::get('/kiosk/info', [AccountController::class, 'kioskInfo'])->middleware('throttle:30,1');
+Route::get('/kiosk/today', [AccountController::class, 'kioskToday'])->middleware('throttle:30,1');   // kiosk screen: today's taps here   // kiosk screen: its name + who can tap
 // a private file on this computer, through a link from /files/link that works for a few minutes (the signature is the permission)
 Route::get('/files/open/{path}', [FileController::class, 'open'])->where('path', '.*')->middleware(['signed', 'throttle:120,1'])->name('files.open');
 
@@ -61,8 +62,6 @@ Route::post('/recovery/send-code', [RecoveryController::class, 'sendCode'])->mid
 
 /* ───────── Any signed-in user (interns only get their own data) ───────── */
 Route::middleware($anyUser)->group(function () {
-    // ID card design settings (valid date, coordinator, signature), read-only: the intern's card preview
-    Route::get('/id-card-settings', [AccountController::class, 'idCardSettings']);
     Route::get('/my-evaluation', [EvaluationController::class, 'mine']);   // intern: was the evaluation submitted?
     Route::get('/my-grade', [GradeController::class, 'mine']);             // intern: the internship grade, once released
     Route::post('/logout', [AuthController::class, 'logout']);
@@ -192,6 +191,7 @@ Route::middleware(ApiTokenAuth::class . ':supervisor')->group(function () {
 
 /* ───────── OJT coordinator only: the quarterly report (Unit Performance Review Report) ───────── */
 Route::middleware(ApiTokenAuth::class . ':ojt_coordinator')->group(function () {
+    Route::get('/coordinator/quarterly-reports', [QuarterlyReportController::class, 'index']);   // the list of saved reports
     Route::get('/coordinator/quarterly-report', [QuarterlyReportController::class, 'show']);
     Route::put('/coordinator/quarterly-report', [QuarterlyReportController::class, 'save']);
 
@@ -299,6 +299,7 @@ Route::middleware($adminOnly)->group(function () {
     Route::post('/admin/kiosks',        [AccountController::class, 'addKiosk']);
     Route::patch('/admin/kiosks/{id}',  [AccountController::class, 'updateKiosk']);
     Route::get('/admin/kiosks/{id}/key', [AccountController::class, 'kioskKey']);
+    Route::get('/admin/kiosks/{id}/taps', [AccountController::class, 'kioskHistory']);   // a kiosk's time ins / outs on a day
     Route::delete('/admin/kiosks/{id}', [AccountController::class, 'removeKiosk']);
 
     // activity log
@@ -309,10 +310,6 @@ Route::middleware($adminOnly)->group(function () {
     Route::post('/admin/backups',        [BackupController::class, 'store']);
     Route::get('/admin/backups/{name}',  [BackupController::class, 'download']);
 
-
-    // ID card settings (valid date, coordinator, signature, office contact): saved for every computer
-    Route::get('/admin/settings/id-card', [AccountController::class, 'idCardSettings']);
-    Route::put('/admin/settings/id-card', [AccountController::class, 'saveIdCardSettings']);
 });
 
 });   // end of the activity-log group

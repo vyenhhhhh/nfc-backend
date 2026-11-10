@@ -22,6 +22,25 @@ class QuarterlyReportController extends Controller
     }
 
     // GET /api/coordinator/quarterly-report?year=2026&quarter=3
+    // GET /api/coordinator/quarterly-reports -> every saved report, newest first:
+    // [{ year, quarter, updated_at, updated_by_name, done, total }] (done/total = the parts finished when last saved)
+    public function index()
+    {
+        if (!Schema::hasTable('quarterly_reports')) return response()->json([]);
+        $rows = DB::table('quarterly_reports as r')->leftJoin('users as u', 'u.id', '=', 'r.updated_by')
+            ->orderByDesc('r.year')->orderByDesc('r.quarter')
+            ->get(['r.year', 'r.quarter', 'r.created_at', 'r.updated_at', 'r.data', 'u.name as updated_by_name']);
+        return response()->json($rows->map(function ($r) {
+            $d = $r->data ? json_decode($r->data, true) : [];
+            $p = is_array($d) ? ($d['_progress'] ?? null) : null;
+            return [
+                'year' => (int) $r->year, 'quarter' => (int) $r->quarter,
+                'created_at' => $r->created_at, 'updated_at' => $r->updated_at, 'updated_by_name' => $r->updated_by_name,
+                'done' => is_array($p) ? (int) ($p['done'] ?? 0) : null, 'total' => is_array($p) ? (int) ($p['total'] ?? 0) : null,
+            ];
+        })->values());
+    }
+
     public function show(Request $request)
     {
         $data = $request->validate(['year' => 'required|integer|min:2020|max:2100', 'quarter' => 'required|integer|min:1|max:4']);

@@ -34,8 +34,9 @@ return [
     //   off    = UID only, like before
     //   on     = phone (Web NFC) and ACR122U kiosks check the code and write a new one on every tap;
     //            kiosks with the old USB reader still work with the UID only (while you switch readers)
-    //   strict = every tap needs a good code (old USB-reader kiosks are refused)
-    'secure_cards' => env('SECURE_CARDS', 'on'),
+    //   strict = (default) every tap needs a good code: UID-only taps (old USB reader) are refused for
+    //            every card, so a card copied by its UID alone never counts. Kiosks use the ACR122U.
+    'secure_cards' => env('SECURE_CARDS', 'strict'),
 
     // A kiosk that loses the internet keeps the taps and sends them when it is back online.
     // Taps older than this are refused (the coordinator adds them by hand).

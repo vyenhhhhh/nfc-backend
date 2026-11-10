@@ -8,6 +8,7 @@ use App\Services\Supervision;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * The HTE supervisor's part (from the OJT coordinator's answers: "the DTRs should be validated by the
@@ -339,7 +340,9 @@ class SupervisorController extends Controller
 
         $q = DB::table('dtr_certifications as d')
             ->leftJoin('users as s', 's.id', '=', 'd.certified_by')
-            ->select('d.*', 's.name as certified_by_name')
+            ->select('d.*', 's.name as certified_by_name',
+                ...(Schema::hasColumn('users', 'position') ? ['s.position as certified_by_position'] : []),
+                ...(Schema::hasColumn('users', 'signature') ? ['s.signature as sig_path'] : []))
             ->orderByDesc('d.period_from');
 
         if ($auth->role === 'intern') {
@@ -351,7 +354,33 @@ class SupervisorController extends Controller
             $q->whereIn('d.user_id', $scope);
         }
 
-        return response()->json($q->get());
+        // the supervisor's signature goes on the printed DTR of a certified period: sent as an image (data URL),
+        // so every role that can see the certification can print it, without opening the private file itself
+        $sigs = [];
+        $rows = $q->get()->map(function ($c) use (&$sigs) {
+            $path = $c->sig_path ?? null;
+            unset($c->sig_path);
+            $c->certified_by_signature = null;
+            if ($path) {
+                if (!array_key_exists($path, $sigs)) {
+                    $sigs[$path] = null;
+                    try {
+                        foreach ([\App\Services\PrivateFiles::disk(), \App\Services\PrivateFiles::publicDisk()] as $disk) {
+                            if ($disk->exists($path)) {
+                                $bytes = $disk->get($path);
+                                $mime = (new \finfo(FILEINFO_MIME_TYPE))->buffer($bytes) ?: 'image/png';
+                                if (str_starts_with($mime, 'image/')) $sigs[$path] = 'data:' . $mime . ';base64,' . base64_encode($bytes);
+                                break;
+                            }
+                        }
+                    } catch (\Throwable $e) { /* no signature: the line is signed by hand */ }
+                }
+                $c->certified_by_signature = $sigs[$path];
+            }
+            return $c;
+        });
+
+        return response()->json($rows);
     }
 
     // POST /api/supervisor/dtr-certifications   { user_id, from: "2026-10-01", to: "2026-10-15", remarks? }

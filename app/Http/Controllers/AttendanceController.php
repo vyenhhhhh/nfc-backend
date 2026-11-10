@@ -221,6 +221,10 @@ class AttendanceController extends Controller
         // (php artisan migrate adds the columns; remembered for an hour so a tap doesn't ask every time)
         $markOffline = $offline && \Illuminate\Support\Facades\Cache::remember('att_offline_cols', 3600,
             fn () => Schema::hasColumn('attendance_records', 'offline_in'));
+        // which kiosk recorded this tap ("main" = the CCIS key in .env): the kiosk screen and the admin's kiosk history use it
+        $kioskCols = \Illuminate\Support\Facades\Cache::remember('att_kiosk_cols', 3600,
+            fn () => Schema::hasColumn('attendance_records', 'kiosk_in'));
+        $kioskTag  = AccountController::kioskTag($kiosk);
 
         if ($action === 'CHECK_IN') {
             DB::table('attendance_records')->insert(array_merge([
@@ -233,7 +237,7 @@ class AttendanceController extends Controller
                 'checked_out_at' => null,
                 'created_at'     => $now,
                 'updated_at'     => $now,
-            ], $markOffline ? ['offline_in' => true] : []));
+            ], $markOffline ? ['offline_in' => true] : [], $kioskCols ? ['kiosk_in' => $kioskTag] : []));
 
             // which official start applies: 1:00 PM for a 4-tap PM check-in, otherwise 8:00 AM
             $start = ($mode === 'four' && $now->hour >= 12) ? $sched['pm_in'] : $sched['am_in'];
@@ -251,6 +255,7 @@ class AttendanceController extends Controller
                 'updated_at'     => $now,
             ];
             if ($markOffline) $update['offline_out'] = true;
+            if ($kioskCols) $update['kiosk_out'] = $kioskTag;
 
             // time after 5:00 PM is overtime: it counts only if the coordinator approves it
             [, $otSeconds] = OjtHours::split($openRecord->checked_in_at, $now);

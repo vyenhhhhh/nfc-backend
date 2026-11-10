@@ -339,7 +339,7 @@ class CardSecurity
 
     private static function flaggedMsg(): string
     {
-        return 'This card could not be verified and was reported to the admin and your OJT coordinator. '
+        return 'This card could not be verified and was reported to the administrator. '
             . 'This tap was not recorded. Please see the OJT office.';
     }
 

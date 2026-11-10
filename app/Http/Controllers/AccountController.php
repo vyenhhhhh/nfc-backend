@@ -204,6 +204,83 @@ class AccountController extends Controller
         ]);
     }
 
+    /** how a kiosk is written on an attendance record: its id, or "main" for the CCIS key in .env */
+    public static function kioskTag($kiosk): string
+    {
+        return $kiosk ? (string) $kiosk->id : 'main';
+    }
+
+    /**
+     * The time ins and time outs one kiosk recorded on a day, newest first:
+     * [{ key, action: CHECK_IN|CHECK_OUT, name, photo, student_id, uid, time, at, offline }]
+     * Taps from before the kiosk was saved on each record: an HTE kiosk shows its own interns', the CCIS kiosk the rest.
+     */
+    public static function kioskTaps($kiosk, string $date): array
+    {
+        $tag    = self::kioskTag($kiosk);
+        $hasCol = Schema::hasColumn('attendance_records', 'kiosk_in');
+        $rows = DB::table('attendance_records as a')->join('users as u', 'u.id', '=', 'a.user_id')
+            ->where('a.date', $date)
+            ->select('a.id', 'a.uid', 'a.checked_in_at', 'a.checked_out_at', 'u.name', 'u.photo', 'u.student_id', 'u.placement',
+                ...($hasCol ? ['a.kiosk_in', 'a.kiosk_out'] : []),
+                ...(Schema::hasColumn('attendance_records', 'offline_in') ? ['a.offline_in', 'a.offline_out'] : []))
+            ->get();
+        $norm  = fn ($s) => preg_replace('/\s+/', ' ', strtolower(trim((string) $s)));
+        // a record with no kiosk saved: which kiosk most likely took it
+        $hteKiosks = Schema::hasTable('kiosks')
+            ? DB::table('kiosks')->whereNotNull('placement')->pluck('placement')->map(fn ($p) => $norm($p))->all() : [];
+        $guess = function ($r) use ($kiosk, $norm, $hteKiosks) {
+            if ($kiosk && !empty($kiosk->placement)) return $norm($kiosk->placement) === $norm($r->placement ?? '');
+            // the main CCIS kiosk: interns whose HTE has no kiosk of its own
+            return !$kiosk && !in_array($norm($r->placement ?? ''), $hteKiosks, true);
+        };
+        $out = [];
+        foreach ($rows as $r) {
+            foreach ([['CHECK_IN', 'checked_in_at', 'kiosk_in', 'offline_in'], ['CHECK_OUT', 'checked_out_at', 'kiosk_out', 'offline_out']] as [$act, $col, $kcol, $ocol]) {
+                if (empty($r->$col)) continue;
+                $here = $hasCol && $r->$kcol !== null ? $r->$kcol === $tag : $guess($r);
+                if (!$here) continue;
+                $at = Carbon::parse($r->$col, 'Asia/Manila');
+                $out[] = [
+                    'key' => "r{$r->id}-" . ($act === 'CHECK_IN' ? 'in' : 'out'),
+                    'token' => "r{$r->id}-" . ($act === 'CHECK_IN' ? 'in' : 'out'),
+                    'action' => $act, 'name' => $r->name, 'photo' => $r->photo, 'student_id' => $r->student_id ?? null,
+                    'uid' => $r->uid, 'time' => $at->format('h:i:s A'), 'at' => $at->toIso8601String(),
+                    'offline' => !empty($r->$ocol ?? null),
+                ];
+            }
+        }
+        usort($out, fn ($a, $b) => strcmp($b['at'], $a['at']));
+        return $out;
+    }
+
+    // GET /api/kiosk/today   (header X-Kiosk-Key) -> this kiosk's time ins and time outs today (the kiosk keeps them after a reload)
+    public function kioskToday(Request $request)
+    {
+        $k = self::kioskFor((string) $request->header('X-Kiosk-Key'));
+        if (!$k['ok']) return response()->json(['message' => 'This device is not an authorized attendance kiosk.'], 401);
+        $today = Carbon::now('Asia/Manila')->toDateString();
+        return response()->json(['date' => $today, 'taps' => array_slice(self::kioskTaps($k['kiosk'], $today), 0, 300)]);
+    }
+
+    // GET /api/admin/kiosks/{id}/taps?date=YYYY-MM-DD   ("main" = the CCIS kiosk) -> one kiosk's tap history for a day
+    public function kioskHistory(Request $request, $id)
+    {
+        $kiosk = null;
+        if ($id !== 'main') {
+            $kiosk = DB::table('kiosks')->where('id', (int) $id)->first();
+            if (!$kiosk) return response()->json(['message' => 'Kiosk not found.'], 404);
+        }
+        $date = (string) $request->query('date', '');
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) $date = Carbon::now('Asia/Manila')->toDateString();
+        $taps = self::kioskTaps($kiosk, $date);
+        return response()->json([
+            'date' => $date, 'taps' => $taps,
+            'ins' => count(array_filter($taps, fn ($t) => $t['action'] === 'CHECK_IN')),
+            'outs' => count(array_filter($taps, fn ($t) => $t['action'] === 'CHECK_OUT')),
+        ]);
+    }
+
     /** May this intern tap at this kiosk? (CCIS kiosks: everyone; HTE kiosks: only interns placed there) */
     public static function kioskAllows($kiosk, $intern): bool
     {
@@ -233,39 +310,6 @@ class AccountController extends Controller
         $page  = max(1, (int) $request->query('page', 1));
         $rows  = $query->orderByDesc('id')->offset(($page - 1) * $per)->limit($per)->get();
         return response()->json(['rows' => $rows, 'total' => $total, 'per_page' => $per, 'page' => $page]);
-    }
-
-    /* ───────────── ID card settings (shared by every computer) ───────────── */
-
-    private const CARD_KEY = 'id_card';
-
-    // GET /api/admin/settings/id-card
-    public function idCardSettings()
-    {
-        if (!Schema::hasTable('app_settings')) return response()->json(['settings' => null]);
-        $v = DB::table('app_settings')->where('key', self::CARD_KEY)->value('value');
-        return response()->json(['settings' => $v ? json_decode($v, true) : null]);
-    }
-
-    // PUT /api/admin/settings/id-card   { valid, coordinator, signature (data URL), contact }
-    public function saveIdCardSettings(Request $request)
-    {
-        $data = $request->validate([
-            'valid'       => 'nullable|date',
-            'coordinator' => 'nullable|string|max:120',
-            'contact'     => 'nullable|string|max:160',
-            'signature'   => 'nullable|string|max:900000',   // a small PNG/JPG as a data URL (≈600 KB)
-        ]);
-        if (!empty($data['signature']) && !preg_match('#^data:image/(png|jpe?g);base64,#', $data['signature'])) {
-            return response()->json(['message' => 'The signature must be a PNG or JPG image.'], 422);
-        }
-        $row = [
-            'valid' => $data['valid'] ?? null, 'coordinator' => $data['coordinator'] ?? '',
-            'contact' => $data['contact'] ?? '', 'signature' => $data['signature'] ?? '',
-        ];
-        DB::table('app_settings')->updateOrInsert(['key' => self::CARD_KEY],
-            ['value' => json_encode($row), 'updated_at' => Carbon::now('Asia/Manila')]);
-        return response()->json(['message' => 'Card settings saved.']);
     }
 
     /* ───────────── DTR type (the HTE decides) ───────────── */

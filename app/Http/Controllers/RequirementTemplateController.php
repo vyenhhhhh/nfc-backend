@@ -6,6 +6,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 /**
  * Blank forms (templates) for the internship requirements.
@@ -59,15 +60,22 @@ class RequirementTemplateController extends Controller
         $data = $request->validate([
             'title'       => 'required|string|max:150',
             'requirement' => 'nullable|string|max:60',
-            'file'        => 'required|file|mimes:pdf,doc,docx,xls,xlsx,ppt,pptx|max:15360',
+            // checked by the file's name (.docx and so on): Word files saved from Google Docs or other apps
+            // are often read as a plain zip, and "mimes" then turned them away
+            'file'        => 'required|file|extensions:pdf,doc,docx,xls,xlsx,ppt,pptx|max:15360',
+        ], [
+            'file.extensions' => 'Only PDF, Word, Excel or PowerPoint files can be added.',
+            'file.max'        => 'The file is too big. The limit is 15 MB.',
         ]);
 
         $file = $request->file('file');
-        $path = $file->store('templates', $this->disk());
+        // keep the real extension, so the saved copy opens as .docx and not as .zip
+        $ext  = strtolower($file->getClientOriginalExtension());
+        $path = $file->storeAs('templates', Str::random(40) . '.' . $ext, $this->disk());
         $actor = $request->attributes->get('auth_user');
 
         $id = DB::table('requirement_templates')->insertGetId([
-            'requirement'   => $data['requirement'] ?: null,
+            'requirement'   => ($data['requirement'] ?? null) ?: null,
             'title'         => $data['title'],
             'file_path'     => $path,
             'original_name' => $file->getClientOriginalName(),

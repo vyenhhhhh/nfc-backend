@@ -5,19 +5,42 @@ namespace App\Http\Controllers;
 use App\Services\Notifier;
 use App\Services\Supervision;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
 
 class OnlineSubmissionController extends Controller
 {
+    // the reasons an on-site intern can give for an off-site day (the same list as the intern's form)
+    private const OFFSITE_REASONS = [
+        'My supervisor asked me to work from home',
+        'Off-site assignment (fieldwork, errand for the office)',
+        'Office closed (no power, bad weather, suspension)',
+        'My card was lost or damaged',
+        'Other (explained below)',
+    ];
+    private const CARD_LOST = 'My card was lost or damaged';
+
     // Intern submits online attendance
     public function submit(Request $request)
     {
+        // on-site interns pick why they weren't at the office; with a lost or damaged card the intern was
+        // at the office as usual, so "Tasks completed" may be left blank. Every other day needs the tasks.
+        $cardLost = $request->input('reason') === self::CARD_LOST;
         $request->validate([
             'user_id'     => 'required|integer',
-            'description' => 'required|string|max:500',
+            'reason'      => ['nullable', 'string', Rule::in(self::OFFSITE_REASONS)],
+            'description' => ($cardLost ? 'nullable' : 'required') . '|string|max:500',
             'date'        => 'required|date',
+        ], [
+            'description.required' => 'Describe the tasks you completed that day.',
+            'reason.in'             => 'Choose a reason from the list.',
         ]);
+        $tasks = trim((string) $request->input('description', ''));
+        // the reason goes at the start of the description, so the supervisor and coordinator see it when they review
+        $description = $request->filled('reason')
+            ? 'Reason: ' . $request->input('reason') . ($tasks !== '' ? "\n\n" . $tasks : '')
+            : $tasks;
 
         $now  = Carbon::now('Asia/Manila');
         $date = Carbon::parse($request->date, 'Asia/Manila');
@@ -77,7 +100,7 @@ class OnlineSubmissionController extends Controller
         $id = DB::table('online_submissions')->insertGetId([
             'user_id'     => $request->user_id,
             'date'        => $request->date,
-            'description' => $request->description,
+            'description' => $description,
             'status'      => 'pending',
             'created_at'  => $now,
             'updated_at'  => $now,
