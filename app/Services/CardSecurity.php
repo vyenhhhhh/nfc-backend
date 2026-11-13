@@ -267,10 +267,11 @@ class CardSecurity
 
         // ── writer kiosk, nothing of ours on the card ──
         if (!$card) return self::unknown($uid);
-        if ($secured && !empty($card->pending_at)
-            && Carbon::parse($card->pending_at, 'Asia/Manila')->greaterThan(Carbon::now('Asia/Manila')->subMinutes(15))) {
-            // a write was cut short a moment ago (card pulled away too early): let the intern through,
-            // the card gets a fresh code right after this tap
+        if ($secured && !empty($card->pending_hash)) {
+            // the last write never finished (the card was pulled away while the new code was being written, so the
+            // kiosk never confirmed it): the card's data is unreadable, which is not a copy. Let the intern through,
+            // whenever they tap next (even the next day); the card gets a fresh code right after this tap.
+            // A finished write always clears pending_hash, so this does not let a UID-only copy of a good card in.
             Activity::record(DB::table('users')->where('id', $card->user_id)->first(), 'Card code rewritten',
                 'The last write did not finish; the card was read without a code and given a new one.', $request);
             return ['ok' => true, 'card' => $card, 'secured' => false];
