@@ -64,6 +64,7 @@ Route::post('/recovery/send-code', [RecoveryController::class, 'sendCode'])->mid
 Route::middleware($anyUser)->group(function () {
     Route::get('/my-evaluation', [EvaluationController::class, 'mine']);   // intern: was the evaluation submitted?
     Route::get('/my-grade', [GradeController::class, 'mine']);             // intern: the internship grade, once released
+    Route::get('/grades/criteria', [GradeController::class, 'criteria']);   // the grading form's items and weights (not private: the intern's grade page shows them too)
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me',      [AuthController::class, 'me']);
     Route::get('/requirements', [RequirementDefController::class, 'index']);   // the internship requirements (the coordinator manages them)
@@ -143,7 +144,6 @@ Route::middleware($staff)->group(function () {
     Route::delete('/evaluations/{id}',  [EvaluationController::class, 'destroy']);
 
     // the internship grade: supervisor appraisal (60%) + coordinator evaluation (40%)
-    Route::get('/grades/criteria', [GradeController::class, 'criteria']);
     Route::get('/grades',          [GradeController::class, 'index']);
 
     Route::get('/today',                [AttendanceController::class, 'today']);
