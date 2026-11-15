@@ -6,6 +6,6 @@ return [
     'allowed_origins_patterns' => [],
     'allowed_headers' => ['*'],
     'exposed_headers' => [],
-    'max_age' => 0,
+    'max_age' => 7200,   // the browser remembers each permission check for 2 hours instead of asking before every request
     'supports_credentials' => false,
 ];
