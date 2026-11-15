@@ -14,33 +14,33 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 /*
- | USER EVALUATION ACCOUNTS: TEST DATABASE ONLY
+ | USER EVALUATION ACCOUNTS: TEST DATABASE ONLY (matches the task lists in Appendix A of the manuscript)
  |
  |   php artisan eval:setup                  creates the evaluation accounts and their sample data
  |   php artisan eval:setup --remove-future  also deletes taps dated after today (left over from clock-change tests)
  |   php artisan eval:setup --remove-demo    also deletes the old test accounts (…@demo.test) and what they made
- |                                           (test announcements, report requests, due dates, quarterly reports),
- |                                           so the evaluation starts clean; kiosks, requirements, forms and calendar stay
+ |   php artisan eval:card <UID> <email>     moves a test NFC card to an evaluation account (between respondents)
  |   php artisan eval:cleanup                deletes every evaluation account and its data (after the evaluation)
  |
- | Accounts (by default one of each, shared by the respondents of that group):
- |   intern, finished OJT (past interns):     hours complete, DTR certified, requirements approved,
- |                                            grade released; System Output Presentation left to upload
- |   intern, upcoming OJT (upcoming interns): not started: pre-internship requirements to upload
- |   HTE supervisor, with their own HTE, the interns above and 2 practice interns with work waiting
- |                                            (overtime, a forgotten time out, an uncertified DTR period, the appraisal)
- |   OJT coordinator: sees every evaluation intern, with practice work waiting
- |                                            (endorsed overtime, post-internship uploads to review, grades to release)
- |   administrator
- | More of each:  php artisan eval:setup --finished=15 --upcoming=15 --supervisors=2
- | Between respondents (a shared account starts fresh again):  php artisan eval:cleanup  then  php artisan eval:setup
+ | Run it a few days before the sessions at most: the sample days are counted back from the day it runs.
  |
- | Every account has the same password (Password123!, or --password=...). The list is saved to storage/app/evaluation-accounts.csv
- | (keep it private, delete it after the evaluation) and printed on the screen.
+ | Accounts (each respondent signs in with their own):
+ |   30 interns (past and upcoming: the form asks which): internship IN PROGRESS, so every intern task of
+ |      Appendix A works: pre-internship requirements approved (the kiosk accepts them), about two weeks of
+ |      taps, a weekday with no tap (for online attendance), a forgotten time out (for a time correction),
+ |      a weekly report requested, an announcement. They change the temporary password on first sign-in.
+ |    2 HTE supervisors, each with their own HTE, half of the interns and 2 practice interns with work waiting:
+ |      online attendance, overtime, an excused day and a time correction (with proofs), a DTR period to
+ |      certify, a project-based intern whose project is not marked yet, and an appraisal to fill in
+ |    1 OJT coordinator, with practice work waiting: online attendance, overtime and an excused day the
+ |      supervisor confirmed, two requirement uploads to review, a project marked complete to confirm, an intern
+ |      ready to grade (appraisal done, hours complete), and ID card requests to print and link (for the admin)
+ |    1 administrator
+ | Every account's password: Password123! (or --password=...). The list is saved in storage/app/evaluation-accounts.csv.
  */
 class EvaluationSetup extends Command
 {
-    protected $signature = 'eval:setup {--remove-future : Also delete taps dated after today (from clock-change tests)} {--remove-demo : Also delete the old test accounts (@demo.test) and what they made} {--finished=1 : How many finished interns} {--upcoming=1 : How many upcoming interns} {--supervisors=1 : How many HTE supervisors (1 or 2)} {--password=Password123! : The password of every evaluation account} {--force : Do not ask to confirm}';
+    protected $signature = 'eval:setup {--remove-future : Also delete taps dated after today (from clock-change tests)} {--remove-demo : Also delete the old test accounts (@demo.test) and what they made} {--interns=30 : How many intern accounts} {--supervisors=2 : How many HTE supervisors (1 or 2)} {--password=Password123! : The password of every evaluation account} {--force : Do not ask to confirm}';
     protected $description = 'Create the user evaluation accounts and sample data (TEST database only)';
 
     public const DOMAIN = 'eval.test';
@@ -96,8 +96,6 @@ class EvaluationSetup extends Command
     // ───────────────────────── the accounts ─────────────────────────
     private function build(): void
     {
-        $now = Carbon::now('Asia/Manila');
-
         $admin = $this->user('admin', 'CCIS', 'Administrator', 'admin', ['position' => 'System Administrator']);
         $coord = $this->user('ojt_coordinator', 'Jhoanna Victoria', 'Pitao', 'coordinator', ['position' => 'OJT Coordinator']);
 
@@ -106,9 +104,8 @@ class EvaluationSetup extends Command
             ['Evaluation HTE 2', 'Educational Institution', 'Butuan City', '2027-03-31'],
         ];
         $nSup = max(1, min(2, (int) $this->option('supervisors')));
-        $htes = array_slice($htes, 0, $nSup);
         $sups = [];
-        foreach ($htes as $i => [$hte, $cat, $addr, $moa]) {
+        foreach (array_slice($htes, 0, $nSup) as $i => [$hte, $cat, $addr, $moa]) {
             $n = $i + 1;
             $sups[] = [$this->user('supervisor', 'HTE Supervisor', (string) $n, "supervisor$n", [
                 'position' => 'Training Supervisor', 'placement' => $hte, 'hte_address' => $addr, 'hte_category' => $cat,
@@ -116,45 +113,57 @@ class EvaluationSetup extends Command
             ]), $hte];
         }
 
-        // [first, last, program]
-        $finished = [
-            ['Andrea', 'Bautista', 'BSIT - 4'], ['Carlo', 'Mercado', 'BSIT - 4'], ['Danica', 'Flores', 'BSCS - 4'],
-            ['Enrico', 'Salazar', 'BSIS - 4'], ['Faith', 'Domingo', 'BSIT - 4'], ['Gabriel', 'Aquino', 'BSCS - 4'],
-            ['Hannah', 'Villareal', 'BSIS - 4'], ['Ivan', 'Pascual', 'BSIT - 4'], ['Joanna', 'Navarro', 'BSCS - 4'],
-            ['Kevin', 'Castillo', 'BSIT - 4'], ['Lea', 'Fernandez', 'BSIS - 4'], ['Miguel', 'Santiago', 'BSCS - 4'],
-            ['Nicole', 'Ramirez', 'BSIT - 4'], ['Oscar', 'Gonzales', 'BSIS - 4'], ['Patricia', 'Morales', 'BSIT - 4'],
-        ];
-        $upcoming = [
-            ['Queenie', 'Tolentino', 'BSIT - 4'], ['Rafael', 'Mendoza', 'BSCS - 4'], ['Sophia', 'Reyes', 'BSIS - 4'],
-            ['Tristan', 'Valdez', 'BSIT - 4'], ['Ursula', 'Cabrera', 'BSCS - 4'], ['Vincent', 'Dela Rosa', 'BSIT - 4'],
-            ['Wendy', 'Lim', 'BSIS - 4'], ['Xavier', 'Ocampo', 'BSIT - 4'], ['Yvonne', 'Padilla', 'BSCS - 4'],
-            ['Zachary', 'Ramos', 'BSIT - 4'], ['Alyssa', 'Gutierrez', 'BSIS - 4'], ['Bryan', 'Soriano', 'BSCS - 4'],
-            ['Camille', 'De Leon', 'BSIT - 4'], ['Dominic', 'Espiritu', 'BSIS - 4'], ['Ella', 'Manalo', 'BSIT - 4'],
-        ];
-        $practice = array_slice([
-            ['Practice', 'Intern A', 'BSIT - 4'], ['Practice', 'Intern B', 'BSCS - 4'],
-            ['Practice', 'Intern C', 'BSIT - 4'], ['Practice', 'Intern D', 'BSIS - 4'],
-        ], 0, 2 * $nSup);   // two for each supervisor
-        // easy to tell apart: "Finished Intern 1", "Upcoming Intern 2", ... (the programs stay mixed)
-        $finished = array_map(fn ($r, $i) => ['Finished', 'Intern ' . ($i + 1), $r[2]], $finished, array_keys($finished));
-        $upcoming = array_map(fn ($r, $i) => ['Upcoming', 'Intern ' . ($i + 1), $r[2]], $upcoming, array_keys($upcoming));
-        $finished = array_slice($finished, 0, max(0, min(15, (int) $this->option('finished'))));
-        $upcoming = array_slice($upcoming, 0, max(0, min(15, (int) $this->option('upcoming'))));
+        // the intern respondents: "Intern 1" … "Intern 30" (past or upcoming is asked in the form, not here)
+        $programs = ['BSIT - 4', 'BSIT - 4', 'BSCS - 4', 'BSIS - 4'];
+        $count = max(0, min(60, (int) $this->option('interns')));
+        for ($i = 0; $i < $count; $i++) {
+            [$sup, $hte] = $sups[$i % $nSup];
+            $prog = $programs[$i % 4];
+            $id = $this->intern('Intern', (string) ($i + 1), $prog, $sup, $hte, sprintf('intern%02d', $i + 1), sprintf('26-9%04d', $i + 1),
+                'Intern', ['must_change_password' => true]);   // Appendix A, task 1: change the temporary password
+            $this->inProgress($id, $coord, 12, true);
+        }
 
-        foreach ($finished as $i => [$f, $l, $prog]) {
-            [$sup, $hte] = $sups[$i % $nSup];
-            $id = $this->intern($f, $l, $prog, $sup, $hte, sprintf('finished%02d', $i + 1), sprintf('26-9%04d', $i + 1), 'finished');
-            $this->finishedData($id, $sup, $coord, $admin, $prog, false);
+        // practice interns (nobody signs in as them): the work the supervisors and the coordinator act on
+        foreach ($sups as $k => [$sup, $hte]) {
+            $letterA = chr(65 + 2 * $k); $letterB = chr(66 + 2 * $k);   // A, B for supervisor 1 · C, D for supervisor 2
+            $a = $this->intern('Practice', "Intern $letterA", 'BSIT - 4', $sup, $hte, 'practice' . strtolower($letterA), sprintf('26-7%04d', 2 * $k + 1), 'practice');
+            $days = $this->inProgress($a, $coord, 25, false);
+            $this->waitingForSupervisor($a, $days);
+            // B / D: a project-based intern, project not marked complete yet, no appraisal yet
+            $b = $this->intern('Practice', "Intern $letterB", 'BSCS - 4', $sup, $hte, 'practice' . strtolower($letterB), sprintf('26-7%04d', 2 * $k + 2), 'practice',
+                ['modality' => 'project', 'modality_custom' => true]);
+            $this->inProgress($b, $coord, 15, false);
         }
-        foreach ($upcoming as $i => [$f, $l, $prog]) {
-            [$sup, $hte] = $sups[$i % $nSup];
-            $this->intern($f, $l, $prog, $sup, $hte, sprintf('upcoming%02d', $i + 1), sprintf('26-8%04d', $i + 1), 'upcoming');
+        [$sup1, $hte1] = $sups[0];
+        // E: work the supervisor already confirmed, two uploads to review, an ID card to link (admin)
+        $e = $this->intern('Practice', 'Intern E', 'BSIT - 4', $sup1, $hte1, 'practicee', '26-70005', 'practice');
+        $days = $this->inProgress($e, $coord, 25, false, ['supervisor_feedback_form', 'performance_appraisal']);
+        $this->waitingForCoordinator($e, $sup1, $days);
+        $this->cardRequest($e, $coord, $admin, true);
+        // F: project-based, the supervisor marked the project complete: the coordinator confirms it
+        $f = $this->intern('Practice', 'Intern F', 'BSIS - 4', $sup1, $hte1, 'practicef', '26-70006', 'practice',
+            ['modality' => 'project', 'modality_custom' => true]);
+        $this->inProgress($f, $coord, 15, false);
+        DB::table('users')->where('id', $f)->update($this->only('users', ['project_marked_at' => Carbon::now('Asia/Manila')->subDay(), 'project_marked_by' => $sup1]));
+        $this->cardRequest($f, $coord, $admin, false);
+        // G: hours complete and the supervisor's appraisal done: the coordinator rates and releases the grade
+        $g = $this->intern('Practice', 'Intern G', 'BSCS - 4', $sup1, $hte1, 'practiceg', '26-70007', 'practice');
+        $this->finishedData($g, $sup1, $coord, $admin, 'BSCS - 4');
+
+        // a weekly report the coordinator asked for, and an announcement
+        if (Schema::hasTable('report_schedules')) {
+            DB::table('report_schedules')->insert($this->only('report_schedules', [
+                'title' => 'Weekly Report – Week 1', 'due_date' => Carbon::today('Asia/Manila')->addDays(7)->toDateString(),
+                'audience' => 'all', 'created_by' => $coord, 'created_at' => Carbon::now('Asia/Manila'), 'updated_at' => Carbon::now('Asia/Manila'),
+            ]));
         }
-        // practice interns: for the supervisors and the coordinator to act on (nobody signs in as them)
-        foreach ($practice as $i => [$f, $l, $prog]) {
-            [$sup, $hte] = $sups[intdiv($i, 2)];
-            $id = $this->intern($f, $l, $prog, $sup, $hte, 'practice' . chr(97 + $i), sprintf('26-7%04d', $i + 1), 'practice');
-            $this->finishedData($id, $sup, $coord, $admin, $prog, true);
+        if (Schema::hasTable('announcements')) {
+            DB::table('announcements')->insert($this->only('announcements', [
+                'title' => 'Welcome to the CCIS OJT system',
+                'body' => 'Please submit your weekly report on time and remember to tap your ID card when you arrive and when you leave.',
+                'created_by' => $coord, 'created_at' => Carbon::now('Asia/Manila'), 'updated_at' => Carbon::now('Asia/Manila'),
+            ]));
         }
     }
 
@@ -182,13 +191,139 @@ class EvaluationSetup extends Command
         return $id;
     }
 
-    private function intern(string $f, string $l, string $prog, int $sup, string $hte, string $login, string $sid, string $kind): int
+    private function intern(string $f, string $l, string $prog, int $sup, string $hte, string $login, string $sid, string $group, array $extra = []): int
     {
-        return $this->user('intern', $f, $l, $login, [
-            'student_id' => $sid, 'program' => $prog, 'college' => 'CCIS', 'semester' => '2nd Semester',
+        return $this->user('intern', $f, $l, $login, array_merge([
+            'student_id' => $sid, 'program' => $prog, 'college' => 'CCIS', 'semester' => '1st Semester',
             'placement' => $hte, 'supervisor_id' => $sup, 'work_mode' => 'onsite', 'modality' => 'onsite', 'scope' => 'local',
             'modality_custom' => false, 'tracking_type' => 'hours', 'dtr_mode' => 'two', 'output_required' => true, 'prior_hours' => 0,
-        ], ['finished' => 'Intern: finished OJT', 'upcoming' => 'Intern: upcoming OJT', 'practice' => 'practice'][$kind]);
+        ], $extra), $group);
+    }
+
+    // ───────────────────────── an internship in progress ─────────────────────────
+    /**
+     * Pre-internship requirements approved (the kiosk accepts the intern) and the last $n workdays before today:
+     * full days, except (for a respondent) one workday with no tap at all, for online attendance, and one
+     * with a time in but no time out, for a time correction. $pendingDuring: during-internship uploads left
+     * waiting for the coordinator. Returns the workdays used, newest first.
+     */
+    private function inProgress(int $id, int $coord, int $n, bool $respondent, array $pendingDuring = []): array
+    {
+        $today = Carbon::today('Asia/Manila');
+        foreach (Requirements::active('pre') as $r) $this->mov($id, $r, 'approved', $coord, $today->copy()->subDays($n * 2 + 10));
+        // during-internship uploads: none yet (a respondent uploads one), except the ones left for the coordinator
+        foreach (Requirements::active('during') as $r) {
+            if (in_array($r->key, $pendingDuring, true)) $this->mov($id, $r, 'pending', null, $today->copy()->subDays(2), true);
+        }
+
+        // the last $n workdays (weekdays that are not a holiday or a day off on the calendar), newest first
+        $days = [];
+        $d = $today->copy()->subDay();
+        while (count($days) < $n) {
+            if (!$d->isWeekend() && !$this->dayOff($d->toDateString(), $id)) $days[] = $d->copy();
+            $d->subDay();
+        }
+        $noTap = $respondent ? [1] : [];       // the 2nd newest workday: no tap (online attendance)
+        $noOut = $respondent ? [2] : [];       // the 3rd newest: time in only (time correction)
+        $rows = [];
+        foreach ($days as $k => $day) {
+            if (in_array($k, $noTap, true)) continue;
+            $in  = $day->copy()->setTime(7, 45)->addMinutes(random_int(0, 13));
+            if ($k % 7 === 5) $in = $day->copy()->setTime(8, 0)->addMinutes(random_int(5, 18));   // late now and then
+            $out = $day->copy()->setTime(17, 0)->addMinutes(random_int(0, 8));
+            $open = in_array($k, $noOut, true);
+            $rows[] = $this->only('attendance_records', [
+                'user_id' => $id, 'uid' => 'EVAL' . $id, 'date' => $day->toDateString(), 'action' => $open ? 'TIME_IN' : 'TIME_OUT',
+                'checked_in_at' => $in, 'checked_out_at' => $open ? null : $out, 'created_at' => $in, 'updated_at' => $open ? $in : $out,
+                'ot_minutes' => 0, 'ot_status' => null, 'ot_approved_minutes' => 0,
+            ]);
+        }
+        foreach (array_chunk($rows, 100) as $chunk) DB::table('attendance_records')->insert($chunk);
+        return $days;
+    }
+
+    /** a holiday or a day off on the calendar for this intern (skipped like the real kiosk does) */
+    private function dayOff(string $date, int $id): bool
+    {
+        try { return (bool) \App\Services\CalendarDays::eventFor($date, $id); } catch (\Throwable $e) { return false; }
+    }
+
+    /** a practice intern of a supervisor: online attendance, overtime, an excused day and a time correction, all waiting */
+    private function waitingForSupervisor(int $id, array $days): void
+    {
+        $now = Carbon::now('Asia/Manila');
+        $recs = DB::table('attendance_records')->where('user_id', $id)->orderByDesc('date')->get();
+        // overtime on the newest day, a forgotten time out on the 2nd newest
+        if ($r = $recs[0] ?? null) {
+            DB::table('attendance_records')->where('id', $r->id)->update(['checked_out_at' => Carbon::parse(substr((string) $r->date, 0, 10) . ' 18:00:00', 'Asia/Manila'), 'ot_minutes' => 60, 'ot_status' => 'pending']);
+        }
+        if ($r = $recs[1] ?? null) {
+            $date = substr((string) $r->date, 0, 10);
+            DB::table('attendance_records')->where('id', $r->id)->update(['action' => 'TIME_IN', 'checked_out_at' => null]);
+            DB::table('time_corrections')->insert($this->only('time_corrections', [
+                'user_id' => $id, 'attendance_id' => $r->id, 'date' => $date, 'kind' => 'out',
+                'requested_out' => Carbon::parse("$date 17:00:00", 'Asia/Manila'), 'reason' => 'I forgot to tap my card when I left at 5:00 PM.',
+                'status' => 'pending', 'proof_path' => $this->samplePdf("correction-proofs/eval-$id.pdf"), 'proof_name' => 'proof-time-out.pdf',
+                'created_at' => $now, 'updated_at' => $now,
+            ]));
+        }
+        // the 3rd and 4th newest workdays become an online day and an excused day (their taps are removed)
+        $this->onlineDay($id, $days[2] ?? null, 'pending');
+        $this->excusedDay($id, $days[3] ?? null, 'pending');
+    }
+
+    /** a practice intern of the coordinator: the same kinds of requests, already confirmed by the supervisor */
+    private function waitingForCoordinator(int $id, int $sup, array $days): void
+    {
+        $now = Carbon::now('Asia/Manila');
+        if ($r = DB::table('attendance_records')->where('user_id', $id)->orderByDesc('date')->first()) {
+            DB::table('attendance_records')->where('id', $r->id)->update($this->only('attendance_records', [
+                'checked_out_at' => Carbon::parse(substr((string) $r->date, 0, 10) . ' 18:30:00', 'Asia/Manila'), 'ot_minutes' => 90, 'ot_status' => 'endorsed',
+                'ot_endorsed_minutes' => 90, 'ot_endorsed_by' => $sup, 'ot_endorsed_at' => $now->copy()->subHours(3),
+            ]));
+        }
+        $this->onlineDay($id, $days[2] ?? null, 'endorsed', $sup);
+        $this->excusedDay($id, $days[3] ?? null, 'endorsed', $sup);
+    }
+
+    private function onlineDay(int $id, ?Carbon $day, string $status, ?int $sup = null): void
+    {
+        if (!$day || !Schema::hasTable('online_submissions')) return;
+        $date = $day->toDateString(); $now = Carbon::now('Asia/Manila');
+        DB::table('attendance_records')->where('user_id', $id)->where('date', $date)->delete();
+        DB::table('online_submissions')->insert($this->only('online_submissions', [
+            'user_id' => $id, 'date' => $date, 'status' => $status,
+            'description' => "Reason: My supervisor asked me to work from home\n\nUpdated the office inventory sheet and prepared the weekly summary report.",
+            'proof_path' => $this->samplePdf("online-proofs/eval-$id.pdf"), 'proof_name' => 'proof-online-day.pdf',
+            'endorsed_by' => $sup, 'endorsed_at' => $sup ? $now->copy()->subHours(5) : null,
+            'created_at' => $day->copy()->setTime(18, 0), 'updated_at' => $now,
+        ]));
+    }
+
+    private function excusedDay(int $id, ?Carbon $day, string $status, ?int $sup = null): void
+    {
+        if (!$day || !Schema::hasTable('school_event_excuses')) return;
+        $date = $day->toDateString(); $now = Carbon::now('Asia/Manila');
+        DB::table('attendance_records')->where('user_id', $id)->where('date', $date)->delete();
+        DB::table('school_event_excuses')->insert($this->only('school_event_excuses', [
+            'user_id' => $id, 'date' => $date, 'event_name' => 'University Foundation Day program', 'mandatory' => true, 'portion' => 'whole',
+            'reason' => 'Attendance of all CCIS students was required.', 'status' => $status,
+            'proof_path' => $this->samplePdf("excuse-proofs/eval-$id.pdf"), 'proof_name' => 'proof-school-event.pdf',
+            'endorsed_by' => $sup, 'endorsed_at' => $sup ? $now->copy()->subHours(4) : null,
+            'created_at' => $day->copy()->subDays(2), 'updated_at' => $now,
+        ]));
+    }
+
+    /** an ID card request approved by the coordinator; $printed: waiting in "To link" for the admin, else in "To print" */
+    private function cardRequest(int $id, int $coord, int $admin, bool $printed): void
+    {
+        if (!Schema::hasTable('nfc_requests')) return;
+        $now = Carbon::now('Asia/Manila');
+        DB::table('nfc_requests')->insert($this->only('nfc_requests', [
+            'user_id' => $id, 'type' => 'new', 'status' => 'approved', 'reviewed_by' => $coord, 'reviewed_at' => $now->copy()->subDays(2),
+            'printed_at' => $printed ? $now->copy()->subDay() : null, 'printed_by' => $printed ? $admin : null,
+            'created_at' => $now->copy()->subDays(3), 'updated_at' => $now->copy()->subDay(),
+        ]));
     }
 
     // ───────────────────────── a finished internship ─────────────────────────
@@ -198,7 +333,11 @@ class EvaluationSetup extends Command
      *   respondent: approved post requirements (System Output left to upload) and a released grade, or
      *   practice:   work waiting for the supervisor and the coordinator.
      */
-    private function finishedData(int $id, int $sup, int $coord, int $admin, string $prog, bool $practice): void
+    /**
+     * An intern ready to grade: hours complete (DTRs certified), the supervisor's appraisal submitted, the
+     * certificate of completion and narrative report uploaded and waiting, the coordinator's rating not given yet.
+     */
+    private function finishedData(int $id, int $sup, int $coord, int $admin, string $prog): void
     {
         $required = (float) (config('ojt.program_hours.' . explode(' ', $prog)[0]) ?? config('ojt.default_hours', 486));
         $start = Carbon::parse(self::START, 'Asia/Manila');
@@ -213,7 +352,7 @@ class EvaluationSetup extends Command
 
         // the ID card: requested, printed, linked and claimed before the internship started
         $uid = strtoupper(bin2hex(random_bytes(4)));
-        $card = ['user_id' => $id, 'uid' => $uid, 'created_at' => $start->copy()->subDays(5)];
+        $card = $this->only('nfc_cards', ['user_id' => $id, 'uid' => $uid, 'created_at' => $start->copy()->subDays(5), 'updated_at' => $start->copy()->subDays(5)]);
         if (Schema::hasColumn('nfc_cards', 'card_uuid')) $card['card_uuid'] = (string) Str::uuid();
         DB::table('nfc_cards')->insert($card);
         if (Schema::hasTable('nfc_requests')) {
@@ -228,7 +367,7 @@ class EvaluationSetup extends Command
         $day = $start->copy();
         $n = 0; $total = 0.0; $batch = [];
         // a practice intern gets about one extra day: the forgotten time out below takes a day's hours away
-        while ($total < $required + ($practice ? 10 : 1)) {
+        while ($total < $required + 1) {
             if ($day->isWeekend() || in_array($day->toDateString(), self::OFF, true)) { $day->addDay(); continue; }
             $n++;
             $late = ($n % 9 === 0) ? random_int(5, 20) : 0;                   // late now and then
@@ -254,37 +393,6 @@ class EvaluationSetup extends Command
         $lastDay = $day->copy()->subDay();
         while ($lastDay->isWeekend() || in_array($lastDay->toDateString(), self::OFF, true)) $lastDay->subDay();
 
-        $waiting = [];   // dates with work waiting: their DTR period is left for the supervisor to certify
-        if ($practice) {
-            // work waiting in the last week: one overtime for the supervisor, one endorsed to the coordinator,
-            // one forgotten time out with a correction request (the supervisor's decision is final)
-            $last = DB::table('attendance_records')->where('user_id', $id)->orderByDesc('date')->limit(3)->get();
-            if ($last->count() === 3) {
-                [$a, $b, $c] = [$last[0], $last[1], $last[2]];
-                $waiting = [substr((string) $a->date, 0, 10), substr((string) $b->date, 0, 10), substr((string) $c->date, 0, 10)];
-                $outA = Carbon::parse($a->date . ' 18:00:00', 'Asia/Manila');
-                DB::table('attendance_records')->where('id', $a->id)->update($this->only('attendance_records', [
-                    'checked_out_at' => $outA, 'ot_minutes' => 60, 'ot_status' => 'pending', 'ot_approved_minutes' => 0,
-                    'ot_reviewed_by' => null, 'ot_reviewed_at' => null,
-                ]));
-                $outB = Carbon::parse($b->date . ' 18:30:00', 'Asia/Manila');
-                DB::table('attendance_records')->where('id', $b->id)->update($this->only('attendance_records', [
-                    'checked_out_at' => $outB, 'ot_minutes' => 90, 'ot_status' => 'endorsed', 'ot_approved_minutes' => 0,
-                    'ot_endorsed_minutes' => 90, 'ot_endorsed_by' => $sup, 'ot_endorsed_at' => $outB->copy()->addDay(),
-                    'ot_reviewed_by' => null, 'ot_reviewed_at' => null,
-                ]));
-                DB::table('attendance_records')->where('id', $c->id)->update([
-                    'action' => 'TIME_IN', 'checked_out_at' => null, 'ot_minutes' => 0, 'ot_status' => null, 'ot_approved_minutes' => 0,
-                ]);
-                DB::table('time_corrections')->insert($this->only('time_corrections', [
-                    'user_id' => $id, 'attendance_id' => $c->id, 'date' => $c->date, 'kind' => 'out',
-                    'requested_out' => Carbon::parse($c->date . ' 17:00:00', 'Asia/Manila'),
-                    'reason' => 'I forgot to tap my card when I left at 5:00 PM.', 'status' => 'pending',
-                    'created_at' => Carbon::parse($c->date . ' 20:00:00', 'Asia/Manila'), 'updated_at' => Carbon::parse($c->date . ' 20:00:00', 'Asia/Manila'),
-                ]));
-            }
-        }
-
         // safety net: if the hours still fall short, add days until the required hours are reached
         while (OjtHours::rendered($id) + 0.01 < $required) {
             $d = $lastDay->copy()->addDay();
@@ -298,7 +406,7 @@ class EvaluationSetup extends Command
             $lastDay = $d;
         }
 
-        // DTR periods (1–15, 16–end of month) certified by the supervisor; a practice intern's last one is left to certify
+        // DTR periods (1–15, 16–end of month), all certified by the supervisor
         $dates = DB::table('attendance_records')->where('user_id', $id)->orderBy('date')->pluck('date')->map(fn ($d) => substr((string) $d, 0, 10));
         $periods = [];
         foreach ($dates as $d) {
@@ -308,7 +416,6 @@ class EvaluationSetup extends Command
             $periods[$from->toDateString()] = $to->toDateString();
         }
         foreach ($periods as $from => $to) {
-            if ($practice && collect($waiting)->contains(fn ($w) => $w >= $from && $w <= $to)) continue;   // left to certify
             $rows = DB::table('attendance_records')->where('user_id', $id)->whereBetween('date', [$from, $to])
                 ->get(['date', 'checked_in_at', 'checked_out_at', 'ot_approved_minutes']);
             $h = 0;
@@ -322,24 +429,15 @@ class EvaluationSetup extends Command
 
         $end = $lastDay->copy();
         $post = Requirements::active('post')->keyBy('key');
-        if ($practice) {
-            // uploaded after the internship, waiting for the coordinator
-            foreach (['certificate_of_completion', 'narrative_report'] as $k) {
-                if ($post->has($k)) $this->mov($id, $post[$k], 'pending', null, $end->copy()->addDays(3), true);
-            }
-            return;
-        }
-
-        // a respondent: post requirements approved except the System Output Presentation (theirs to upload)
+        // uploaded after the internship and waiting for the coordinator; the rest approved (System Output only if the HTE asks)
         foreach ($post as $k => $r) {
-            if ($k === 'system_output') continue;
-            $this->mov($id, $r, 'approved', $coord, $end->copy()->addDays(5));
+            if (in_array($k, ['certificate_of_completion', 'narrative_report'], true)) $this->mov($id, $r, 'pending', null, $end->copy()->addDays(3), true);
+            elseif ($k !== 'system_output') $this->mov($id, $r, 'approved', $coord, $end->copy()->addDays(5));
         }
 
-        // the grade: the supervisor's appraisal (60%) and the coordinator's evaluation (40%), released
+        // the supervisor's appraisal (60% of the grade), submitted; the coordinator's part (40%) is the respondent's task
         $supRatings = []; foreach (Grading::keys('supervisor') as $k) $supRatings[$k] = random_int(4, 5);
-        $coRatings  = []; foreach (Grading::keys('coordinator') as $k) $coRatings[$k] = random_int(4, 5);
-        if (!$supRatings || !$coRatings || !Schema::hasTable('evaluations') || !Schema::hasTable('intern_grades')) return;
+        if (!$supRatings || !Schema::hasTable('evaluations')) return;
         $evAt = $end->copy()->addDays(2)->setTime(15, 0);
         $supName = DB::table('users')->where('id', $sup)->value('name');
         DB::table('evaluations')->insert($this->only('evaluations', [
@@ -347,14 +445,6 @@ class EvaluationSetup extends Command
             'ratings' => json_encode($supRatings), 'average' => round(array_sum($supRatings) / count($supRatings), 2),
             'strengths' => 'Reliable and quick to learn; worked well with the team.', 'improvements' => 'Ask questions earlier when a task is unclear.',
             'recommendation' => 'recommend', 'share_comments' => true, 'created_at' => $evAt, 'updated_at' => $evAt,
-        ]));
-        $s = Grading::supervisor($supRatings)['total'];
-        $c = Grading::coordinator($coRatings)['total'];
-        $gAt = $end->copy()->addDays(10)->setTime(9, 0);
-        DB::table('intern_grades')->insert($this->only('intern_grades', [
-            'intern_id' => $id, 'ratings' => json_encode($coRatings), 'coordinator_score' => $c, 'supervisor_score' => $s,
-            'final_grade' => Grading::final($s, $c), 'remarks' => 'Completed the internship requirements.',
-            'graded_by' => $coord, 'graded_by_name' => 'Jhoanna Victoria Pitao', 'finalized_at' => $gAt, 'created_at' => $gAt, 'updated_at' => $gAt,
         ]));
     }
 
@@ -428,7 +518,7 @@ class EvaluationSetup extends Command
 
     private function saveList(): void
     {
-        $order = ['Administrator', 'OJT coordinator', 'HTE supervisor', 'Intern: finished OJT', 'Intern: upcoming OJT'];
+        $order = ['Administrator', 'OJT coordinator', 'HTE supervisor', 'Intern'];
         usort($this->accounts, fn ($a, $b) => [array_search($a['group'], $order), $a['email']] <=> [array_search($b['group'], $order), $b['email']]);
 
         $csv = "Group,Name,Email,Password,Respondent\n";
