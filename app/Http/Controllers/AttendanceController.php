@@ -627,10 +627,13 @@ class AttendanceController extends Controller
 
         $isIntern = $user->role === 'intern';
         $uid      = strtoupper(trim($data['uid'] ?? ''));
+        // only the admin can unlink an intern's NFC card, and only when the form sent the card field;
+        // for the OJT coordinator (or a form without it) the card is left exactly as it is
+        $cardEdit = $isIntern && $isAdmin && $request->has('uid');
 
         // a new card is linked only through Card Requests (after approval and printing);
         // here the admin can keep the current card or unlink it (e.g. a lost card)
-        if ($isIntern && $uid !== '') {
+        if ($cardEdit && $uid !== '') {
             $current = DB::table('nfc_cards')->where('user_id', $id)->value('uid');
             if (strtoupper((string) $current) !== $uid) {
                 return response()->json([
@@ -640,7 +643,7 @@ class AttendanceController extends Controller
         }
 
         // the card can't already belong to someone else
-        if ($isIntern && $uid !== '') {
+        if ($cardEdit && $uid !== '') {
             \App\Services\CardSecurity::dropOrphans();   // a card of a deleted account is free again
             $taken = DB::table('nfc_cards')
                 ->where('uid', $uid)
@@ -785,7 +788,7 @@ class AttendanceController extends Controller
                     DB::table('api_tokens')->where('user_id', $id)->delete();
                 }
 
-                if ($isIntern) {
+                if ($cardEdit) {
                     $card = DB::table('nfc_cards')->where('user_id', $id)->first();
 
                     if ($uid === '') {
