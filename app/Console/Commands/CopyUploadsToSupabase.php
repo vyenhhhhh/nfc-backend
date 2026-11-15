@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Storage;
 class CopyUploadsToSupabase extends Command
 {
     protected $signature = 'uploads:copy-to-supabase';
-    protected $description = 'Copy local uploaded files (profiles, movs, work_mode) to Supabase Storage';
+    protected $description = 'Copy local uploaded files (profiles, movs, work_mode, templates) to Supabase Storage';
 
     public function handle(): int
     {
@@ -20,7 +20,7 @@ class CopyUploadsToSupabase extends Command
         $cloud = Storage::disk('supabase');
         $copied = 0; $skipped = 0; $failed = 0;
 
-        foreach (['profiles', 'movs', 'work_mode'] as $folder) {
+        foreach (['profiles', 'movs', 'work_mode', 'templates'] as $folder) {   // templates: the blank requirement forms
             foreach ($local->allFiles($folder) as $path) {
                 try {
                     if ($cloud->exists($path)) { $skipped++; continue; }
