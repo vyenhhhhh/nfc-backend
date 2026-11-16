@@ -107,6 +107,8 @@ class FileController extends Controller
 
             case 'signatures':
                 if (in_array($role, ['admin', 'ojt_coordinator', 'supervisor'], true)) return true;
+                // the OJT coordinator's signature is printed on the back of every intern's ID card (My NFC Card shows it)
+                if (DB::table('users')->where('role', 'ojt_coordinator')->where('signature', $path)->exists()) return true;
                 return DB::table('users')->where('id', $me)->value('signature') === $path;
 
             case 'work_mode':

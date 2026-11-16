@@ -94,6 +94,31 @@ class AccountController extends Controller
     }
 
     // GET /api/admin/kiosks  (+ the HTE names interns are placed at, for the form)
+    /**
+     * GET /api/card-signer: the OJT coordinator whose name and signature are printed under the card rules on the
+     * back of every intern's ID card. The active coordinator with a signature comes first (then any active one).
+     * Any signed-in user may ask: the intern's own card shows it too.
+     */
+    public function cardSigner()
+    {
+        $q = DB::table('users')->where('role', 'ojt_coordinator');
+        if (Schema::hasColumn('users', 'active')) $q->where(fn ($w) => $w->where('active', true)->orWhereNull('active'));
+        $hasSig = Schema::hasColumn('users', 'signature');
+        if ($hasSig) $q->orderByRaw("CASE WHEN signature IS NULL OR signature = '' THEN 1 ELSE 0 END");
+        $c = $q->orderBy('id')->first();
+        if (!$c) return response()->json(['name' => null, 'signature' => null]);
+
+        $first = trim((string) ($c->first_name ?? ''));
+        $last  = trim((string) ($c->last_name ?? ''));
+        $mid   = trim((string) ($c->middle_name ?? ''));
+        $ext   = trim((string) ($c->name_extension ?? $c->extension ?? ''));
+        $name  = ($first !== '' || $last !== '')
+            ? trim($first . ($mid !== '' ? ' ' . mb_strtoupper(mb_substr($mid, 0, 1)) . '.' : '') . ' ' . $last . ($ext !== '' ? ' ' . $ext : ''))
+            : (string) ($c->name ?? '');
+
+        return response()->json(['name' => $name, 'signature' => $hasSig ? ($c->signature ?: null) : null]);
+    }
+
     public function kiosks()
     {
         $rows = \App\Services\SchemaCache::has('kiosks') ? DB::table('kiosks')->orderBy('name')->get()->map(fn ($k) => self::kioskRow($k)) : collect();

@@ -64,6 +64,7 @@ Route::post('/recovery/send-code', [RecoveryController::class, 'sendCode'])->mid
 Route::middleware($anyUser)->group(function () {
     Route::get('/my-evaluation', [EvaluationController::class, 'mine']);   // intern: was the evaluation submitted?
     Route::get('/my-grade', [GradeController::class, 'mine']);             // intern: the internship grade, once released
+    Route::get('/card-signer', [AccountController::class, 'cardSigner']);   // the coordinator's name + signature on the back of the ID cards
     Route::get('/grades/criteria', [GradeController::class, 'criteria']);   // the grading form's items and weights (not private: the intern's grade page shows them too)
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me',      [AuthController::class, 'me']);
