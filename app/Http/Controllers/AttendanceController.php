@@ -776,7 +776,7 @@ class AttendanceController extends Controller
         }
 
         try {
-            DB::transaction(function () use ($id, $update, $isIntern, $uid, $user) {
+            DB::transaction(function () use ($id, $update, $isIntern, $uid, $user, $cardEdit) {
                 DB::table('users')->where('id', $id)->update($update);
                 // the HTE changed its rule: every intern under this supervisor follows it
                 if ($user->role === 'supervisor' && array_key_exists('output_required', $update)) {
