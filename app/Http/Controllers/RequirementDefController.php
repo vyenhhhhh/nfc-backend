@@ -127,6 +127,28 @@ class RequirementDefController extends Controller
         if (!Requirements::ready()) return $this->notReady();
         $row = DB::table('requirement_defs')->where('id', $id)->first();
         if (!$row) return response()->json(['message' => 'Requirement not found.'], 404);
+
+        // ?forever=1: delete a requirement that was already removed, for good. Only one that no intern ever sent
+        // a file for: those files stay with their requirement (it stays under "Removed" and can be put back).
+        if ($request->boolean('forever')) {
+            if ($row->active) return response()->json(['message' => 'Remove it first, then delete it.'], 422);
+            $sent = DB::table('movs')->where('requirement', $row->key)->count();
+            if ($sent > 0) {
+                return response()->json(['message' => "\"{$row->label}\" has {$sent} file" . ($sent === 1 ? '' : 's') . " from interns, so it can't be deleted. It stays under Removed, and its files are kept."], 422);
+            }
+            // its blank forms (file and record), its note and its due dates go with it
+            if (\Illuminate\Support\Facades\Schema::hasTable('requirement_templates')) {
+                foreach (DB::table('requirement_templates')->where('requirement', $row->key)->pluck('id') as $tid) {
+                    app(RequirementTemplateController::class)->destroy($tid);
+                }
+            }
+            foreach (['requirement_form_notes', 'requirement_deadlines'] as $t) {
+                if (\Illuminate\Support\Facades\Schema::hasTable($t)) DB::table($t)->where('requirement', $row->key)->delete();
+            }
+            DB::table('requirement_defs')->where('id', $id)->delete();
+            return response()->json(['message' => "\"{$row->label}\" deleted."]);
+        }
+
         if ($row->phase === 'pre' && DB::table('requirement_defs')->where('phase', 'pre')->where('active', true)->count() <= 1) {
             return response()->json(['message' => 'Keep at least one pre-internship requirement.'], 422);
         }
