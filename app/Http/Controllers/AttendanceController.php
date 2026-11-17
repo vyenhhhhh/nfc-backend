@@ -241,7 +241,10 @@ class AttendanceController extends Controller
             // which official start applies: 1:00 PM for a 4-tap PM check-in, otherwise 8:00 AM
             $start = ($mode === 'four' && $now->hour >= 12) ? $sched['pm_in'] : $sched['am_in'];
             $startAt = $at($start);
-            if ($now->greaterThan($startAt)) {
+            // project-based interns don't follow 8-to-5 unless their HTE says so: then never "late" or "early"
+            if (\App\Services\OjtCompletion::flexibleSchedule($intern)) {
+                // no late / early-arrival note
+            } elseif ($now->greaterThan($startAt)) {
                 $late = (int) floor(($now->getTimestamp() - $startAt->getTimestamp()) / 60);
                 if ($late > 0) $note = "Late by {$late} min (official start time is " . $startAt->format('g:i A') . ').';
             } elseif ($now->lessThan($startAt)) {
@@ -390,7 +393,9 @@ class AttendanceController extends Controller
                 $w->whereIn('u.id', $scope)->orWhere('u.id', $auth->id);
             }))
             ->orderBy('u.name')
-            ->select('u.*', 'n.uid as nfc_uid', 's.name as supervisor_name')
+            ->select(array_merge(['u.*', 'n.uid as nfc_uid', 's.name as supervisor_name'],
+                // an intern's HTE rule for project-based interns (the DTR uses it)
+                \App\Services\SchemaCache::has('users', 'project_fixed_schedule') ? ['s.project_fixed_schedule as hte_fixed_schedule'] : []))
             ->get();
 
         // never send password hashes to the browser
@@ -436,6 +441,7 @@ class AttendanceController extends Controller
             'hte_address'     => 'nullable|string|max:255',
             'moa_valid_until' => 'nullable|date',
             'output_required' => 'nullable|boolean',              // supervisor: the HTE requires a system output presentation
+            'project_fixed_schedule' => 'nullable|boolean',       // supervisor: project-based interns follow 8:00–5:00
             'prior_hours'     => 'nullable|numeric|min:0|max:1000', // intern: hours rendered in an earlier term
             'emergency_contact_name'     => 'nullable|string|max:150',
             'emergency_contact_relation' => 'nullable|string|max:60',
@@ -531,6 +537,11 @@ class AttendanceController extends Controller
             if (!empty($data['placement'])) \App\Services\HteModality::setForHte($data['placement'], $data['hte_modality'], true);
         }
 
+        // a supervisor: do the HTE's project-based interns follow 8:00–5:00? (not set = a flexible schedule)
+        if ($data['role'] === 'supervisor' && \App\Services\SchemaCache::has('users', 'project_fixed_schedule')) {
+            DB::table('users')->where('id', $userId)->update(['project_fixed_schedule' => !empty($data['project_fixed_schedule'])]);
+        }
+
         // staff details (when the columns exist: php artisan migrate)
         if (!$isIntern && \App\Services\SchemaCache::has('users', 'position')) {
             $extra = [
@@ -605,6 +616,7 @@ class AttendanceController extends Controller
             'hte_address'     => 'nullable|string|max:255',
             'moa_valid_until' => 'nullable|date',
             'output_required' => 'nullable|boolean',              // supervisor: the HTE requires a system output presentation
+            'project_fixed_schedule' => 'nullable|boolean',       // supervisor: project-based interns follow 8:00–5:00
             'prior_hours'     => 'nullable|numeric|min:0|max:1000', // intern: hours rendered in an earlier term
             'emergency_contact_name'     => 'nullable|string|max:150',
             'emergency_contact_relation' => 'nullable|string|max:60',
@@ -708,6 +720,10 @@ class AttendanceController extends Controller
                 if ($request->has('hte_address')) $update['hte_address'] = trim((string) ($data['hte_address'] ?? '')) ?: null;
                 if ($request->has('moa_valid_until')) $update['moa_valid_until'] = !empty($data['moa_valid_until']) ? Carbon::parse($data['moa_valid_until'])->toDateString() : null;
             }
+        }
+        if ($user->role === 'supervisor' && $request->has('project_fixed_schedule') && $data['project_fixed_schedule'] !== null
+            && \App\Services\SchemaCache::has('users', 'project_fixed_schedule')) {
+            $update['project_fixed_schedule'] = (bool) $data['project_fixed_schedule'];
         }
         $hasOutCol = \App\Services\SchemaCache::has('users', 'output_required');
         if ($hasOutCol && $user->role === 'supervisor' && $request->has('output_required') && $data['output_required'] !== null) {

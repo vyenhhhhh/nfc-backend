@@ -166,6 +166,8 @@ class AuthController extends Controller
         $user->supervisor_name = !empty($user->supervisor_id)
             ? DB::table('users')->where('id', $user->supervisor_id)->value('name')
             : null;
+        // project-based interns: is their schedule flexible (never late, no undertime on the DTR)?
+        if (($user->role ?? '') === 'intern') $user->flexible_schedule = \App\Services\OjtCompletion::flexibleSchedule($user);
 
         return response()->json($user);
     }

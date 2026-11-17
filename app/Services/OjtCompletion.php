@@ -16,6 +16,30 @@ class OjtCompletion
         return ($u->modality ?? null) === 'project';
     }
 
+    /**
+     * Does this intern keep a flexible schedule (never late, no undertime or tardiness on the DTR)?
+     * Only project-based interns, and only when their HTE doesn't make them follow 8:00–5:00
+     * (users.project_fixed_schedule on the HTE supervisor's account; not set = flexible).
+     */
+    public static function flexibleSchedule($u): bool
+    {
+        if (!self::isProject($u)) return false;
+        if (empty($u->supervisor_id) || !SchemaCache::has('users', 'project_fixed_schedule')) return true;
+        return !\Illuminate\Support\Facades\DB::table('users')->where('id', $u->supervisor_id)->value('project_fixed_schedule');
+    }
+
+    /** ids of the interns (from a list with modality and supervisor_id) that keep a flexible schedule, with one query */
+    public static function flexibleIds($interns): array
+    {
+        $proj = collect($interns)->filter(fn ($u) => self::isProject($u));
+        if ($proj->isEmpty()) return [];
+        $fixed = SchemaCache::has('users', 'project_fixed_schedule')
+            ? \Illuminate\Support\Facades\DB::table('users')->whereIn('id', $proj->pluck('supervisor_id')->filter()->unique()->all())
+                ->where('project_fixed_schedule', true)->pluck('id')->map(fn ($v) => (int) $v)->all()
+            : [];
+        return $proj->filter(fn ($u) => !in_array((int) ($u->supervisor_id ?? 0), $fixed, true))->pluck('id')->map(fn ($v) => (int) $v)->values()->all();
+    }
+
     public static function projectDone($u): bool
     {
         return !empty($u->project_confirmed_at ?? null);

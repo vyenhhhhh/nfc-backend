@@ -31,19 +31,21 @@ class GradeController extends Controller
     }
 
     /** days present and late days (time in after 8:00) from the attendance log */
-    /** Days present and days late of many interns with ONE query: [user_id => ['days' => n, 'late' => n]] */
-    private static function attendanceMany(array $userIds): array
+    /** Days present and days late of many interns with ONE query: [user_id => ['days' => n, 'late' => n]]
+     *  $noLate: ids of project-based interns whose HTE doesn't make them follow 8:00–5:00, so they are never counted late */
+    private static function attendanceMany(array $userIds, array $noLate = []): array
     {
         $out = [];
         foreach ($userIds as $id) $out[(int) $id] = ['days' => 0, 'late' => 0];
         if (!$userIds) return $out;
+        $noLate = array_flip(array_map('intval', $noLate));
         $rows = DB::table('attendance_records')->whereIn('user_id', $userIds)->whereNotNull('checked_in_at')
             ->orderBy('checked_in_at')->get(['user_id', 'date', 'checked_in_at']);
-        foreach ($rows->groupBy('user_id') as $uid => $userRows) $out[(int) $uid] = self::countAttendance($userRows);
+        foreach ($rows->groupBy('user_id') as $uid => $userRows) $out[(int) $uid] = self::countAttendance($userRows, isset($noLate[(int) $uid]));
         return $out;
     }
 
-    private static function countAttendance($rows): array
+    private static function countAttendance($rows, bool $noLate = false): array
     {
         $lateAfter = config('ojt.grading.late_after', '08:00');
         $days = []; $late = 0;
@@ -51,7 +53,7 @@ class GradeController extends Controller
             $d = (string) $r->date;
             if (isset($days[$d])) continue;           // the first time in of the day counts
             $days[$d] = true;
-            if (Carbon::parse($r->checked_in_at)->timezone('Asia/Manila')->format('H:i') > $lateAfter) $late++;
+            if (!$noLate && Carbon::parse($r->checked_in_at)->timezone('Asia/Manila')->format('H:i') > $lateAfter) $late++;
         }
         return ['days' => count($days), 'late' => $late];
     }
@@ -114,7 +116,7 @@ class GradeController extends Controller
             ->whereIn('status', ['pending', 'approved'])->distinct()->pluck('user_id')->map(fn ($v) => (int) $v)->all());
         // hours and attendance of every intern in two queries (not two per intern)
         $hoursOf = OjtHours::renderedMany($ids);
-        $attOf   = self::attendanceMany($ids);
+        $attOf   = self::attendanceMany($ids, \App\Services\OjtCompletion::flexibleIds($interns));
         $rows = $interns->map(function ($u) use ($evals, $grades, $sups, $docs, $supAddr, $mine, $hoursOf, $attOf, $narrOff, $narrIds) {
             $e = $evals[$u->id] ?? null;
             $g = $grades[$u->id] ?? null;
