@@ -128,6 +128,7 @@ Route::middleware(ApiTokenAuth::class . ':intern')->group(function () {
 
     // forgot to tap out: ask the HTE supervisor to set the time out
     Route::post('/intern/time-corrections', [TimeCorrectionController::class, 'store']);
+    Route::delete('/intern/time-corrections/{id}', [TimeCorrectionController::class, 'destroy']);
 
     Route::post('/intern/school-events',        [SchoolEventController::class, 'store']);
     Route::delete('/intern/school-events/{id}', [SchoolEventController::class, 'destroy']);
@@ -196,6 +197,7 @@ Route::middleware(ApiTokenAuth::class . ':ojt_coordinator')->group(function () {
     Route::put('/coordinator/quarterly-report', [QuarterlyReportController::class, 'save']);
 
     // the coordinator's part of the internship grade (40%), and releasing it to the intern
+    Route::get('/grades/summary',            [GradeController::class, 'summary']);   // the sidebar count on Grades
     Route::put('/grades/{internId}',         [GradeController::class, 'save']);
     Route::post('/grades/{internId}/reopen', [GradeController::class, 'reopen']);
 });

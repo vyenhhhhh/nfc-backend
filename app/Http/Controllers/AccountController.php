@@ -35,7 +35,7 @@ class AccountController extends Controller
         if ((int) $user->id === (int) $auth->id) {
             return response()->json(['message' => "You can't deactivate your own account."], 422);
         }
-        if (!Schema::hasColumn('users', 'deactivated_at')) {
+        if (!\App\Services\SchemaCache::has('users', 'deactivated_at')) {
             return response()->json(['message' => 'Run "php artisan migrate" on the server first.'], 500);
         }
 
@@ -54,7 +54,7 @@ class AccountController extends Controller
     public function setActiveBatch(Request $request)
     {
         $data = $request->validate(['ids' => 'required|array|min:1|max:1000', 'ids.*' => 'integer', 'active' => 'required|boolean']);
-        if (!Schema::hasColumn('users', 'deactivated_at')) {
+        if (!\App\Services\SchemaCache::has('users', 'deactivated_at')) {
             return response()->json(['message' => 'Run "php artisan migrate" on the server first.'], 500);
         }
         $auth = $this->auth($request);
@@ -65,7 +65,7 @@ class AccountController extends Controller
 
         $now = Carbon::now('Asia/Manila');
         DB::table('users')->whereIn('id', $ids)->update(['deactivated_at' => $data['active'] ? null : $now, 'updated_at' => $now]);
-        if (!$data['active'] && Schema::hasTable('api_tokens')) {
+        if (!$data['active'] && \App\Services\SchemaCache::has('api_tokens')) {
             DB::table('api_tokens')->whereIn('user_id', $ids)->delete();   // signed out everywhere right away
         }
         Activity::record($auth, $data['active'] ? 'Interns reactivated (batch)' : 'Interns deactivated (end of term)',
@@ -96,7 +96,7 @@ class AccountController extends Controller
     // GET /api/admin/kiosks  (+ the HTE names interns are placed at, for the form)
     public function kiosks()
     {
-        $rows = Schema::hasTable('kiosks') ? DB::table('kiosks')->orderBy('name')->get()->map(fn ($k) => self::kioskRow($k)) : collect();
+        $rows = \App\Services\SchemaCache::has('kiosks') ? DB::table('kiosks')->orderBy('name')->get()->map(fn ($k) => self::kioskRow($k)) : collect();
         $places = DB::table('users')->where('role', 'intern')->whereNotNull('placement')->where('placement', '!=', '')
             ->distinct()->orderBy('placement')->pluck('placement');
         return response()->json(['kiosks' => $rows->values(), 'placements' => $places->values()]);
@@ -148,7 +148,7 @@ class AccountController extends Controller
     // the key, encrypted with APP_KEY, so the admin can see the setup link again (only if the column exists)
     private static function encKey(string $key): array
     {
-        return Schema::hasColumn('kiosks', 'key_enc') ? ['key_enc' => \Illuminate\Support\Facades\Crypt::encryptString($key)] : [];
+        return \App\Services\SchemaCache::has('kiosks', 'key_enc') ? ['key_enc' => \Illuminate\Support\Facades\Crypt::encryptString($key)] : [];
     }
 
     // GET /api/admin/kiosks/{id}/key  -> the kiosk's current key (to show its setup link again)
@@ -218,16 +218,16 @@ class AccountController extends Controller
     public static function kioskTaps($kiosk, string $date): array
     {
         $tag    = self::kioskTag($kiosk);
-        $hasCol = Schema::hasColumn('attendance_records', 'kiosk_in');
+        $hasCol = \App\Services\SchemaCache::has('attendance_records', 'kiosk_in');
         $rows = DB::table('attendance_records as a')->join('users as u', 'u.id', '=', 'a.user_id')
             ->where('a.date', $date)
             ->select('a.id', 'a.uid', 'a.checked_in_at', 'a.checked_out_at', 'u.name', 'u.photo', 'u.student_id', 'u.placement',
                 ...($hasCol ? ['a.kiosk_in', 'a.kiosk_out'] : []),
-                ...(Schema::hasColumn('attendance_records', 'offline_in') ? ['a.offline_in', 'a.offline_out'] : []))
+                ...(\App\Services\SchemaCache::has('attendance_records', 'offline_in') ? ['a.offline_in', 'a.offline_out'] : []))
             ->get();
         $norm  = fn ($s) => preg_replace('/\s+/', ' ', strtolower(trim((string) $s)));
         // a record with no kiosk saved: which kiosk most likely took it
-        $hteKiosks = Schema::hasTable('kiosks')
+        $hteKiosks = \App\Services\SchemaCache::has('kiosks')
             ? DB::table('kiosks')->whereNotNull('placement')->pluck('placement')->map(fn ($p) => $norm($p))->all() : [];
         $guess = function ($r) use ($kiosk, $norm, $hteKiosks) {
             if ($kiosk && !empty($kiosk->placement)) return $norm($kiosk->placement) === $norm($r->placement ?? '');
@@ -294,7 +294,7 @@ class AccountController extends Controller
     // GET /api/admin/activity?q=&role=&page=
     public function activity(Request $request)
     {
-        if (!Schema::hasTable('activity_logs')) return response()->json(['rows' => [], 'total' => 0, 'per_page' => 50]);
+        if (!\App\Services\SchemaCache::has('activity_logs')) return response()->json(['rows' => [], 'total' => 0, 'per_page' => 50]);
         $per = 50;
         $q   = trim((string) $request->query('q', ''));
         $role = (string) $request->query('role', '');

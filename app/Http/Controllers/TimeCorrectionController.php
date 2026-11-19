@@ -19,6 +19,21 @@ use Illuminate\Support\Facades\DB;
 class TimeCorrectionController extends Controller
 {
     // GET /api/intern/time-corrections  -> the signed-in intern's own requests
+    // DELETE /api/intern/time-corrections/{id}: the intern takes back a request the supervisor has not decided yet
+    public function destroy(Request $request, $id)
+    {
+        $auth = $request->attributes->get('auth_user');
+        $row  = DB::table('time_corrections')->where('id', $id)->first();
+        if (!$row || (int) $row->user_id !== (int) $auth->id) {
+            return response()->json(['message' => 'Request not found.'], 404);
+        }
+        if ($row->status !== 'pending') {
+            return response()->json(['message' => 'Only requests your supervisor has not decided yet can be removed.'], 409);
+        }
+        DB::table('time_corrections')->where('id', $id)->delete();
+        return response()->json(['message' => 'Request removed.']);
+    }
+
     public function mine(Request $request)
     {
         $uid = $request->attributes->get('auth_user')->id;
@@ -152,8 +167,9 @@ class TimeCorrectionController extends Controller
         if ($day >= $today) {
             return response()->json(['message' => 'Pick a past day. Today you can still tap at the kiosk.'], 422);
         }
-        if ($d->isWeekend()) {
-            return response()->json(['message' => 'That day is a ' . $d->format('l') . '. Only weekdays can be added.'], 422);
+        // a Saturday / Sunday can be added only when the intern's HTE marked it "We're open"
+        if (\App\Services\CalendarDays::closedWeekend($day, $auth->id)) {
+            return response()->json(['message' => 'That day is a ' . $d->format('l') . '. Only workdays can be added (weekdays, or a weekend day your HTE marked open).'], 422);
         }
         if ($d->lt(Carbon::today('Asia/Manila')->subDays(30))) {
             return response()->json(['message' => 'You can only ask for days in the last 30 days.'], 422);

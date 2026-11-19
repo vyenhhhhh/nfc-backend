@@ -19,7 +19,7 @@ class HteModality
     public static function ready(): bool
     {
         if (self::$ready === null) {
-            try { self::$ready = Schema::hasColumn('users', 'hte_modality') && Schema::hasColumn('users', 'modality_custom'); }
+            try { self::$ready = \App\Services\SchemaCache::has('users', 'hte_modality') && \App\Services\SchemaCache::has('users', 'modality_custom'); }
             catch (\Throwable $e) { self::$ready = false; }
         }
         return self::$ready;

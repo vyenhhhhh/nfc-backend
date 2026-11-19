@@ -26,7 +26,7 @@ class QuarterlyReportController extends Controller
     // [{ year, quarter, updated_at, updated_by_name, done, total }] (done/total = the parts finished when last saved)
     public function index()
     {
-        if (!Schema::hasTable('quarterly_reports')) return response()->json([]);
+        if (!\App\Services\SchemaCache::has('quarterly_reports')) return response()->json([]);
         $rows = DB::table('quarterly_reports as r')->leftJoin('users as u', 'u.id', '=', 'r.updated_by')
             ->orderByDesc('r.year')->orderByDesc('r.quarter')
             ->get(['r.year', 'r.quarter', 'r.created_at', 'r.updated_at', 'r.data', 'u.name as updated_by_name']);
@@ -48,9 +48,9 @@ class QuarterlyReportController extends Controller
 
         // interns who had attendance (a tap or an approved online day) in the quarter
         $ids = DB::table('attendance_records')->whereBetween('date', [$from, $to])->distinct()->pluck('user_id');
-        $hasMode = Schema::hasColumn('users', 'work_mode');
+        $hasMode = \App\Services\SchemaCache::has('users', 'work_mode');
         $cols = $hasMode ? ['id', 'name', 'program', 'placement', 'work_mode'] : ['id', 'name', 'program', 'placement'];
-        if (Schema::hasColumn('users', 'modality')) { $cols[] = 'modality'; $cols[] = 'scope'; }
+        if (\App\Services\SchemaCache::has('users', 'modality')) { $cols[] = 'modality'; $cols[] = 'scope'; }
         $row = fn ($u) => ['id' => (int) $u->id, 'name' => $u->name, 'program' => $u->program, 'placement' => $u->placement,
             'work_mode' => $u->work_mode ?? null, 'modality' => $u->modality ?? null, 'scope' => $u->scope ?? null];
         $interns = DB::table('users')->whereIn('id', $ids)->where('role', 'intern')
@@ -59,12 +59,12 @@ class QuarterlyReportController extends Controller
         $enrolled = DB::table('users')->where('role', 'intern')->get(['id', 'program'])
             ->map(fn ($u) => ['id' => (int) $u->id, 'program' => $u->program])->values();
 
-        $saved = Schema::hasTable('quarterly_reports')
+        $saved = \App\Services\SchemaCache::has('quarterly_reports')
             ? DB::table('quarterly_reports')->where('year', $data['year'])->where('quarter', $data['quarter'])->first()
             : null;
 
         return response()->json([
-            'ready'      => Schema::hasTable('quarterly_reports'),
+            'ready'      => \App\Services\SchemaCache::has('quarterly_reports'),
             'period'     => ['from' => $from, 'to' => $to],
             'interns'    => $interns,
             'enrolled'   => $enrolled,
@@ -82,7 +82,7 @@ class QuarterlyReportController extends Controller
         $req = $request->validate([
             'year' => 'required|integer|min:2020|max:2100', 'quarter' => 'required|integer|min:1|max:4', 'data' => 'required|array',
         ]);
-        if (!Schema::hasTable('quarterly_reports')) {
+        if (!\App\Services\SchemaCache::has('quarterly_reports')) {
             return response()->json(['message' => 'Run "php artisan migrate" on the server first.'], 500);
         }
         $json = json_encode($req['data'], JSON_UNESCAPED_UNICODE);

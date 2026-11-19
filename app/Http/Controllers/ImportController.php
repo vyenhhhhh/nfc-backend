@@ -148,7 +148,7 @@ class ImportController extends Controller
         $rows     = $this->rows($request);
         $loginUrl = (string) $request->input('login_url', '');
         $auth     = $request->attributes->get('auth_user');
-        $hasFlag  = Schema::hasColumn('users', 'must_change_password');
+        $hasFlag  = \App\Services\SchemaCache::has('users', 'must_change_password');
         $now      = Carbon::now('Asia/Manila');
 
         $created = []; $skipped = []; $noEmail = [];

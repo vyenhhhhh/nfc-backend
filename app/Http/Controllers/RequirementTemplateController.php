@@ -27,7 +27,7 @@ class RequirementTemplateController extends Controller
             'templates' => DB::table('requirement_templates')->orderBy('requirement')->orderBy('title')->get(),
             // { requirement key: note }, "__general" is the note at the top of the list
             // the notes table is new: the forms still load if the migration has not been run yet
-            'notes'     => Schema::hasTable('requirement_form_notes') ? DB::table('requirement_form_notes')->pluck('note', 'requirement') : (object) [],
+            'notes'     => \App\Services\SchemaCache::has('requirement_form_notes') ? DB::table('requirement_form_notes')->pluck('note', 'requirement') : (object) [],
         ]);
     }
 
@@ -38,7 +38,7 @@ class RequirementTemplateController extends Controller
             'requirement' => 'required|string|max:60',
             'note'        => 'nullable|string|max:600',
         ]);
-        if (!Schema::hasTable('requirement_form_notes')) {
+        if (!\App\Services\SchemaCache::has('requirement_form_notes')) {
             return response()->json(['message' => 'Notes are not set up yet. Run php artisan migrate on the server.'], 500);
         }
         $note = trim((string) ($data['note'] ?? ''));

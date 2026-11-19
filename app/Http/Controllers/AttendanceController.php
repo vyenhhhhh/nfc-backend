@@ -165,12 +165,7 @@ class AttendanceController extends Controller
                 }
             }
             // an HTE that marked this day "We're open" (even a Saturday / Sunday) lets its interns time in
-            $hteOpen = false;
-            if ($now->isWeekend() && \App\Services\CalendarDays::ready()) {
-                $hteKey  = \App\Services\CalendarDays::hteOf($card->user_id);
-                $hteOpen = $hteKey && DB::table('calendar_events')->whereDate('date', $today)
-                    ->where('hte_key', $hteKey)->where('type', 'working')->exists();
-            }
+            $hteOpen = $now->isWeekend() && \App\Services\CalendarDays::hteOpen($today, $card->user_id);
             if (!$blocked && !$hteOpen && config('ojt.block_weekends', false) && $now->isWeekend()) {
                 $blocked = 'Time-ins are closed on ' . $now->format('l') . 's.';
             }
@@ -220,10 +215,10 @@ class AttendanceController extends Controller
         // a tap the kiosk saved while it was offline is marked, so the coordinator can see it
         // (php artisan migrate adds the columns; remembered for an hour so a tap doesn't ask every time)
         $markOffline = $offline && \Illuminate\Support\Facades\Cache::remember('att_offline_cols', 3600,
-            fn () => Schema::hasColumn('attendance_records', 'offline_in'));
+            fn () => \App\Services\SchemaCache::has('attendance_records', 'offline_in'));
         // which kiosk recorded this tap ("main" = the CCIS key in .env): the kiosk screen and the admin's kiosk history use it
         $kioskCols = \Illuminate\Support\Facades\Cache::remember('att_kiosk_cols', 3600,
-            fn () => Schema::hasColumn('attendance_records', 'kiosk_in'));
+            fn () => \App\Services\SchemaCache::has('attendance_records', 'kiosk_in'));
         $kioskTag  = AccountController::kioskTag($kiosk);
 
         if ($action === 'CHECK_IN') {
@@ -263,7 +258,7 @@ class AttendanceController extends Controller
             if ($otMinutes >= (int) config('ojt.overtime_min_minutes', 15)) {
                 $update['ot_minutes'] = $otMinutes;
                 $update['ot_status']  = 'pending';
-                $note = "Overtime of {$otMinutes} min was sent to your OJT coordinator for approval.";
+                $note = "Overtime of {$otMinutes} min was sent to your HTE supervisor for review.";
             }
 
             DB::table('attendance_records')->where('id', $openRecord->id)->update($update);
@@ -369,7 +364,7 @@ class AttendanceController extends Controller
     public function ping(Request $request)
     {
         $auth = $request->attributes->get('auth_user');
-        if ($auth && Schema::hasColumn('users', 'last_seen_at')) {
+        if ($auth && \App\Services\SchemaCache::has('users', 'last_seen_at')) {
             DB::table('users')->where('id', $auth->id)->update(['last_seen_at' => Carbon::now('Asia/Manila')]);
         }
         return response()->json(['ok' => true]);
@@ -515,7 +510,7 @@ class AttendanceController extends Controller
         ]);
 
         // the internship modality and scope (when the columns exist: php artisan migrate)
-        if ($isIntern && Schema::hasColumn('users', 'modality')) {
+        if ($isIntern && \App\Services\SchemaCache::has('users', 'modality')) {
             DB::table('users')->where('id', $userId)->update([
                 'modality' => $data['modality'] ?? 'onsite',
                 'scope'    => $data['scope'] ?? 'local',
@@ -523,7 +518,7 @@ class AttendanceController extends Controller
             if (\App\Services\HteModality::ready()) DB::table('users')->where('id', $userId)->update(['modality_custom' => !$followHte]);
         }
         // a supervisor: the kind of HTE (for the HTE list and the Quarterly Report)
-        if ($data['role'] === 'supervisor' && !empty($data['hte_category']) && Schema::hasColumn('users', 'hte_category')) {
+        if ($data['role'] === 'supervisor' && !empty($data['hte_category']) && \App\Services\SchemaCache::has('users', 'hte_category')) {
             DB::table('users')->where('id', $userId)->update(['hte_category' => trim($data['hte_category'])]);
         }
         // a supervisor: the modality of their HTE, given to the interns already placed there
@@ -533,7 +528,7 @@ class AttendanceController extends Controller
         }
 
         // staff details (when the columns exist: php artisan migrate)
-        if (!$isIntern && Schema::hasColumn('users', 'position')) {
+        if (!$isIntern && \App\Services\SchemaCache::has('users', 'position')) {
             $extra = [
                 'position'    => $data['position'] ?? null,
                 'hte_address' => ($data['role'] === 'supervisor') ? ($data['hte_address'] ?? null) : null,
@@ -700,7 +695,7 @@ class AttendanceController extends Controller
         }
 
         // staff details: only when the form sent them (and the columns exist)
-        if (!$isIntern && Schema::hasColumn('users', 'position')) {
+        if (!$isIntern && \App\Services\SchemaCache::has('users', 'position')) {
             if ($request->has('position')) $update['position'] = trim((string) ($data['position'] ?? '')) ?: null;
             if ($user->role === 'supervisor') {
                 if ($request->has('hte_address')) $update['hte_address'] = trim((string) ($data['hte_address'] ?? '')) ?: null;
@@ -722,7 +717,7 @@ class AttendanceController extends Controller
             if (($data['modality'] ?? null) === 'virtual') $update['work_mode'] = 'offsite';
             if (($data['modality'] ?? null) === 'onsite')  $update['work_mode'] = 'onsite';
             $update['tracking_type'] = 'hours';   // no output-based tracking
-            if (Schema::hasColumn('users', 'modality')) {
+            if (\App\Services\SchemaCache::has('users', 'modality')) {
                 $update['modality'] = $data['modality'] ?? ($user->modality ?? 'onsite');
                 $update['scope']    = $data['scope'] ?? ($user->scope ?? 'local');
                 // "Same as the HTE", or a modality of its own (an exception to the HTE)
@@ -769,7 +764,7 @@ class AttendanceController extends Controller
             $update['hte_modality'] = $newHteMod = $data['hte_modality'];
         }
         // a supervisor: the kind of HTE (empty clears it)
-        if ($user->role === 'supervisor' && $request->has('hte_category') && Schema::hasColumn('users', 'hte_category')) {
+        if ($user->role === 'supervisor' && $request->has('hte_category') && \App\Services\SchemaCache::has('users', 'hte_category')) {
             $update['hte_category'] = trim((string) ($data['hte_category'] ?? '')) ?: null;
         }
 
@@ -782,7 +777,7 @@ class AttendanceController extends Controller
                 }
 
                 // a new password signs the user out everywhere
-                if (isset($update['password']) && Schema::hasTable('api_tokens')) {
+                if (isset($update['password']) && \App\Services\SchemaCache::has('api_tokens')) {
                     DB::table('api_tokens')->where('user_id', $id)->delete();
                 }
 
@@ -846,13 +841,13 @@ class AttendanceController extends Controller
                 // Delete everything that belongs to this user first (skips tables that don't exist yet)
                 foreach (['nfc_cards', 'tokens', 'attendance_records', 'online_submissions', 'nfc_requests',
                           'notifications', 'account_recovery', 'api_tokens', 'time_corrections', 'dtr_certifications'] as $t) {
-                    if (Schema::hasTable($t) && Schema::hasColumn($t, 'user_id')) {
+                    if (\App\Services\SchemaCache::has($t) && \App\Services\SchemaCache::has($t, 'user_id')) {
                         DB::table($t)->where('user_id', $id)->delete();
                     }
                 }
 
                 // MOVs: remove the uploaded files too
-                if (Schema::hasTable('movs')) {
+                if (\App\Services\SchemaCache::has('movs')) {
                     $files = DB::table('movs')->where('user_id', $id)->pluck('file_path');
                     foreach ($files as $f) {
                         \App\Services\PrivateFiles::delete($f);
@@ -860,20 +855,20 @@ class AttendanceController extends Controller
                     DB::table('movs')->where('user_id', $id)->delete();
 
                     // if this user reviewed other people's MOVs, keep those but clear the reviewer
-                    if (Schema::hasColumn('movs', 'reviewed_by')) {
+                    if (\App\Services\SchemaCache::has('movs', 'reviewed_by')) {
                         DB::table('movs')->where('reviewed_by', $id)->update(['reviewed_by' => null]);
                     }
                 }
 
                 // a deleted supervisor's interns are left without a supervisor (the admin assigns a new one)
-                if (Schema::hasColumn('users', 'supervisor_id')) {
+                if (\App\Services\SchemaCache::has('users', 'supervisor_id')) {
                     DB::table('users')->where('supervisor_id', $id)->update(['supervisor_id' => null]);
                 }
 
                 // Announcements they posted
-                if (Schema::hasTable('announcements')) {
+                if (\App\Services\SchemaCache::has('announcements')) {
                     foreach (['user_id', 'posted_by', 'created_by'] as $col) {
-                        if (Schema::hasColumn('announcements', $col)) {
+                        if (\App\Services\SchemaCache::has('announcements', $col)) {
                             DB::table('announcements')->where($col, $id)->delete();
                         }
                     }
@@ -925,7 +920,7 @@ class AttendanceController extends Controller
     // an on-site intern goes back to onsite. Hybrid keeps whatever the day-to-day work mode is.
     public function setPlacement(Request $request, $id)
     {
-        if (!Schema::hasColumn('users', 'modality')) {
+        if (!\App\Services\SchemaCache::has('users', 'modality')) {
             return response()->json(['message' => 'Run "php artisan migrate" on the server first.'], 500);
         }
         $data = $request->validate([
@@ -971,7 +966,7 @@ class AttendanceController extends Controller
     // Saved on the HTE's supervisor account(s); the HTE list and the Quarterly Report use it.
     public function setHteCategory(Request $request)
     {
-        if (!Schema::hasColumn('users', 'hte_category')) {
+        if (!\App\Services\SchemaCache::has('users', 'hte_category')) {
             return response()->json(['message' => 'Run "php artisan migrate" on the server first.'], 500);
         }
         $data = $request->validate(['hte' => 'required|string|max:150', 'category' => 'nullable|string|max:60']);
@@ -1135,7 +1130,7 @@ class AttendanceController extends Controller
         if (!$user) {
             return response()->json(['message' => 'User not found.'], 404);
         }
-        if (!Schema::hasColumn('users', 'signature')) {
+        if (!\App\Services\SchemaCache::has('users', 'signature')) {
             return response()->json(['message' => 'Run php artisan migrate first.'], 422);
         }
         $auth = $request->attributes->get('auth_user');

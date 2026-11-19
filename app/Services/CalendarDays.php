@@ -30,6 +30,25 @@ class CalendarDays
         return $userId ? self::key(DB::table('users')->where('id', $userId)->value('placement')) : null;
     }
 
+    /**
+     * Did the intern's HTE mark this date "We're open"? (a "working" day on the HTE calendar)
+     * Used for Saturdays / Sundays: closed by default, but an HTE that works that day opens it for its own interns.
+     */
+    public static function hteOpen(string $date, $internId): bool
+    {
+        if (!self::ready()) return false;
+        $hte = self::hteOf($internId);
+        return $hte && DB::table('calendar_events')->whereDate('date', $date)
+            ->where('hte_key', $hte)->where('type', 'working')->exists();
+    }
+
+    /** Saturday or Sunday that the intern's HTE did NOT open: no OJT that day. */
+    public static function closedWeekend(string $date, $internId): bool
+    {
+        $d = \Carbon\Carbon::parse($date, 'Asia/Manila');
+        return $d->isWeekend() && !self::hteOpen($d->toDateString(), $internId);
+    }
+
     /** Does this event close OJT (on its own)? */
     public static function closes($e): bool
     {

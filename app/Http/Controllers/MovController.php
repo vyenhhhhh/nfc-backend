@@ -200,15 +200,17 @@ class MovController extends Controller
         }
 
         // Notify the intern about the decision
+        // A requirement sent back to the intern is called "returned" (the database still stores 'rejected').
+        $word = $request->status === 'approved' ? 'approved' : 'returned';
         Notifier::toUser(
             $mov->user_id,
-            $request->status === 'approved' ? 'MOV Approved' : 'MOV Rejected',
-            'Your "' . $mov->title . '" was ' . $request->status . '.'
+            $request->status === 'approved' ? 'Requirement Approved' : 'Requirement Returned',
+            'Your "' . $mov->title . '" was ' . $word . '.'
                 . ($request->remarks ? ' Remarks: ' . $request->remarks : ''),
             'mov_review'
         );
 
-        return response()->json(['message' => 'Submission ' . $request->status . '.']);
+        return response()->json(['message' => 'Submission ' . $word . '.']);
     }
 
     // POST /coordinator/movs/{id}/undo
@@ -239,7 +241,7 @@ class MovController extends Controller
         Notifier::toUser(
             $mov->user_id,
             'MOV Review Undone',
-            'Your "' . $mov->title . '" was marked ' . $was . ' by mistake. It is back to waiting for review.',
+            'Your "' . $mov->title . '" was marked ' . ($was === 'rejected' ? 'returned' : $was) . ' by mistake. It is back to waiting for review.',
             'mov_review'
         );
 

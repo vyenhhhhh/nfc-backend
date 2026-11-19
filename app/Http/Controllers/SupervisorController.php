@@ -341,8 +341,8 @@ class SupervisorController extends Controller
         $q = DB::table('dtr_certifications as d')
             ->leftJoin('users as s', 's.id', '=', 'd.certified_by')
             ->select('d.*', 's.name as certified_by_name',
-                ...(Schema::hasColumn('users', 'position') ? ['s.position as certified_by_position'] : []),
-                ...(Schema::hasColumn('users', 'signature') ? ['s.signature as sig_path'] : []))
+                ...(\App\Services\SchemaCache::has('users', 'position') ? ['s.position as certified_by_position'] : []),
+                ...(\App\Services\SchemaCache::has('users', 'signature') ? ['s.signature as sig_path'] : []))
             ->orderByDesc('d.period_from');
 
         if ($auth->role === 'intern') {

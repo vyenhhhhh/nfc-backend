@@ -16,7 +16,7 @@ class Requirements
     public static function ready(): bool
     {
         if (self::$hasTable === null) {
-            try { self::$hasTable = Schema::hasTable('requirement_defs'); } catch (\Throwable $e) { self::$hasTable = false; }
+            try { self::$hasTable = \App\Services\SchemaCache::has('requirement_defs'); } catch (\Throwable $e) { self::$hasTable = false; }
         }
         return self::$hasTable;
     }
@@ -35,10 +35,13 @@ class Requirements
     /** Keys of the pre-internship requirements that must all be approved before the internship starts. */
     public static function preKeys(): array
     {
+        // kept for the rest of the request: a tap asks for this list more than once
+        static $keys = null;
+        if ($keys !== null) return $keys;
         if (self::ready()) {
-            $keys = self::active('pre')->pluck('key')->all();
-            if ($keys) return $keys;
+            $k = self::active('pre')->pluck('key')->all();
+            if ($k) return $keys = $k;
         }
-        return config('ojt.pre_requirements', []);
+        return $keys = config('ojt.pre_requirements', []);
     }
 }

@@ -88,8 +88,13 @@ class CardSecurity
 
     public static function findCardByUid(string $uid): ?object
     {
-        $card = DB::table('nfc_cards')->whereIn(DB::raw('UPPER(uid)'), self::uidVariants($uid))->first();
-        if ($card && !DB::table('users')->where('id', $card->user_id)->exists()) {
+        // one query: the card, and whether its account still exists (the UPPER(uid) index makes this fast)
+        $card = DB::table('nfc_cards as c')
+            ->leftJoin('users as u', 'u.id', '=', 'c.user_id')
+            ->whereIn(DB::raw('UPPER(c.uid)'), self::uidVariants($uid))
+            ->select('c.*', 'u.id as owner_exists')
+            ->first();
+        if ($card && !$card->owner_exists) {
             // its account was deleted straight in the database: the card is free again
             self::dropOrphans();
             return null;
@@ -221,6 +226,7 @@ class CardSecurity
         // ── old USB reader (UID only): it can't read or write the token ──
         if (!$writer) {
             if (!$card) return self::unknown($uid);
+            if (self::locked($card)) return self::refuseLocked($card);
             if (self::mode() === 'strict' && $secured && !$request->input('offline_sync')) {
                 return self::refuse(403, 'USE_SECURE_KIOSK', $card,
                     'Please tap on a kiosk with the new card reader. This tap was not recorded.');
@@ -243,6 +249,8 @@ class CardSecurity
                     "The data of this intern's card was found on another card (UID {$uid}).");
                 return self::refuse(403, 'CARD_FLAGGED', $owner, self::flaggedMsg());
             }
+            // a card with an open alert is locked: neither the real card nor a copy works until the admin checks it
+            if (self::locked($owner)) return self::refuseLocked($owner);
             $h = self::hashToken($payload['token']);
             if (!empty($owner->token_hash) && hash_equals($owner->token_hash, $h)) {
                 return ['ok' => true, 'card' => $owner, 'secured' => true];
@@ -267,6 +275,7 @@ class CardSecurity
 
         // ── writer kiosk, nothing of ours on the card ──
         if (!$card) return self::unknown($uid);
+        if (self::locked($card)) return self::refuseLocked($card);
         if ($secured && !empty($card->pending_hash)) {
             // the last write never finished (the card was pulled away while the new code was being written, so the
             // kiosk never confirmed it): the card's data is unreadable, which is not a copy. Let the intern through,
@@ -334,9 +343,35 @@ class CardSecurity
         $set = ['token_hash' => null, 'pending_hash' => null, 'pending_at' => null, 'secured_at' => null, 'flagged_at' => null];
         if ($newCard) $set['card_uuid'] = null;
         DB::table('nfc_cards')->where('id', $cardId)->update($set);
+        if ($newCard) {
+            // a replacement card was released: the old card (and any copy of it) no longer works, so its alerts are closed
+            try {
+                DB::table('card_flags')->where('nfc_card_id', $cardId)->whereNull('resolved_at')
+                    ->update(['resolved_at' => Carbon::now('Asia/Manila'), 'resolution' => 'replaced']);
+            } catch (\Throwable $e) { /* alerts are only a record */ }
+        }
     }
 
     // ───────────── helpers ─────────────
+
+    /**
+     * A card with an open alert is LOCKED. Why: when a card is copied, the copy and the real card
+     * share one code. Whichever is tapped first gets the new code; the other one is caught at its
+     * next tap. Without the lock, the one holding the new code (maybe the copy) would keep working.
+     * With the lock, BOTH stop at the first sign of a copy, until the admin checks the intern's real
+     * card (Card alerts → Reset card) or gives a replacement card (the old code and UID stop working).
+     */
+    public static function locked(?object $card): bool
+    {
+        return $card && !empty($card->flagged_at);
+    }
+
+    private static function refuseLocked(object $card): array
+    {
+        return self::refuse(403, 'CARD_LOCKED', $card,
+            'This card is locked because a possible copy of it was detected. This tap was not recorded. '
+            . 'Please bring your ID card to the OJT office.');
+    }
 
     private static function flaggedMsg(): string
     {
@@ -360,6 +395,15 @@ class CardSecurity
     private static function flag(?object $card, string $uid, ?string $uuid, string $reason, ?object $kiosk, Request $request, string $details): void
     {
         $intern = $card ? DB::table('users')->where('id', $card->user_id)->first() : null;
+        if ($card && $reason === 'old_token') {
+            // the last tap that WAS recorded with this card: when the real card is the one caught, this is the copy's tap
+            $last = DB::table('attendance_records')->where('user_id', $card->user_id)->where('uid', '!=', 'ONLINE')
+                ->orderByDesc('updated_at')->first(['checked_in_at', 'checked_out_at', 'updated_at']);
+            if ($last) {
+                $t = Carbon::parse($last->checked_out_at ?: $last->checked_in_at)->timezone('Asia/Manila')->format('M j, g:i A');
+                $details .= " Last tap recorded with this card: {$t}. If the intern says it was not them, that tap was made with the copy.";
+            }
+        }
         $where  = $kiosk->name ?? 'CCIS (main)';
         $now    = Carbon::now('Asia/Manila');
         try {

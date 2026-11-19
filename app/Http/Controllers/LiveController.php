@@ -36,10 +36,10 @@ class LiveController extends Controller
         $tables = Cache::remember('live_tables_v5', 3600, function () {
             $found = [];
             foreach (self::TABLES as $t) {
-                if (!Schema::hasTable($t)) continue;
+                if (!\App\Services\SchemaCache::has($t)) continue;
                 $found[$t] = [
-                    'id'      => Schema::hasColumn($t, 'id'),
-                    'updated' => Schema::hasColumn($t, 'updated_at'),
+                    'id'      => \App\Services\SchemaCache::has($t, 'id'),
+                    'updated' => \App\Services\SchemaCache::has($t, 'updated_at'),
                 ];
             }
             return $found;

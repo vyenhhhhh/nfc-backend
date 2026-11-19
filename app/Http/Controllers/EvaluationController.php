@@ -55,7 +55,7 @@ class EvaluationController extends Controller
     // GET /api/evaluations   (supervisor: own interns · coordinator / admin: everyone)
     public function index(Request $request)
     {
-        if (!Schema::hasTable('evaluations')) return response()->json(['ready' => false, 'evaluations' => []]);
+        if (!\App\Services\SchemaCache::has('evaluations')) return response()->json(['ready' => false, 'evaluations' => []]);
         $auth = $this->auth($request);
         // the appraisals are part of the grade: not for the admin (only the HTE supervisor and the OJT coordinator)
         if (($auth->role ?? '') === 'admin') {
@@ -63,13 +63,14 @@ class EvaluationController extends Controller
         }
         $q = DB::table('evaluations as e')->join('users as u', 'u.id', '=', 'e.intern_id')->select('e.*', 'u.name as intern_name', 'u.supervisor_id');
         if ($auth->role === 'supervisor') $q->where('u.supervisor_id', $auth->id);
+        else $q->where('e.mode', '!=', 'draft');   // a supervisor's draft is not sent to anyone yet
         return response()->json(['ready' => true, 'evaluations' => $q->orderByDesc('e.updated_at')->get()->map(fn ($e) => self::row($e) + ['intern_name' => $e->intern_name])]);
     }
 
     // POST /api/evaluations   (multipart for paper)  { intern_id, mode, ratings{}, strengths, improvements, comments, recommendation | file }
     public function store(Request $request)
     {
-        if (!Schema::hasTable('evaluations')) return response()->json(['message' => 'Run "php artisan migrate" on the server first.'], 500);
+        if (!\App\Services\SchemaCache::has('evaluations')) return response()->json(['message' => 'Run "php artisan migrate" on the server first.'], 500);
         $auth = $this->auth($request);
         $data = $request->validate([
             'intern_id'      => 'required|integer',
@@ -80,12 +81,19 @@ class EvaluationController extends Controller
             'comments'       => 'nullable|string|max:3000',
             'recommendation' => 'nullable|in:hire,recommend,none',
             'share_comments' => 'nullable|boolean',
+            'draft'          => 'nullable|boolean',   // save without submitting (the supervisor can finish it later)
             'file'           => 'required_if:mode,paper|nullable|file|mimes:pdf,jpg,jpeg,png|max:10240',
         ]);
         $intern = DB::table('users')->where('id', $data['intern_id'])->first();
         if (!$this->allowed($auth, $intern)) return response()->json(['message' => 'You can only evaluate your own interns.'], 403);
-        if (Schema::hasTable('intern_grades') && DB::table('intern_grades')->where('intern_id', $intern->id)->whereNotNull('finalized_at')->exists()) {
+        if (\App\Services\SchemaCache::has('intern_grades') && DB::table('intern_grades')->where('intern_id', $intern->id)->whereNotNull('finalized_at')->exists()) {
             return response()->json(['message' => 'The OJT coordinator already released this intern\'s grade, so the appraisal can no longer be changed.'], 422);
+        }
+
+        $old = DB::table('evaluations')->where('intern_id', $intern->id)->first();
+        $draft = (bool) ($data['draft'] ?? false) && $data['mode'] === 'system';
+        if ($draft && $old && $old->mode !== 'draft') {
+            return response()->json(['message' => 'This appraisal was already submitted. Use Save changes instead.'], 422);
         }
 
         $now = Carbon::now('Asia/Manila');
@@ -96,21 +104,21 @@ class EvaluationController extends Controller
             'ratings' => null, 'average' => null, 'file_path' => null, 'original_name' => null,
         ];
         // may the intern read the strengths / weaknesses? (needs the share_comments column from the migration)
-        if (Schema::hasColumn('evaluations', 'share_comments')) $row['share_comments'] = (bool) ($data['share_comments'] ?? true);
+        if (\App\Services\SchemaCache::has('evaluations', 'share_comments')) $row['share_comments'] = (bool) ($data['share_comments'] ?? true);
 
         if ($data['mode'] === 'system') {
             // the CCIS supervisor appraisal (config ojt.grading.supervisor): every item 1-5
             $clean = Grading::clean('supervisor', $data['ratings']);
-            if (!Grading::complete('supervisor', $clean)) return response()->json(['message' => 'Please rate every item from 1 to 5.'], 422);
+            if (!$draft && !Grading::complete('supervisor', $clean)) return response()->json(['message' => 'Please rate every item from 1 to 5.'], 422);
+            if ($draft) $row['mode'] = 'draft';   // kept only for the supervisor: it does not count until it is submitted
             $row['ratings'] = json_encode($clean);
-            $row['average'] = round(array_sum($clean) / max(count($clean), 1), 2);
+            $row['average'] = count($clean) ? round(array_sum($clean) / count($clean), 2) : null;
         } else {
             $f = $request->file('file');
             $row['file_path'] = \App\Services\PrivateFiles::store($f, 'evaluations');   // private: short-lived links only
             $row['original_name'] = mb_substr($f->getClientOriginalName(), 0, 191);
         }
 
-        $old = DB::table('evaluations')->where('intern_id', $intern->id)->first();
         if ($old) {
             if ($old->file_path && $old->file_path !== $row['file_path']) {
                 \App\Services\PrivateFiles::delete($old->file_path);
@@ -120,7 +128,12 @@ class EvaluationController extends Controller
             DB::table('evaluations')->insert($row + ['created_at' => $now]);
         }
 
-        Activity::record($auth, 'Evaluation ' . ($old ? 'updated' : 'submitted') . " ({$data['mode']})", $intern->name, $request);
+        if ($draft) {
+            Activity::record($auth, 'Saved the appraisal as a draft', $intern->name, $request);
+            return response()->json(['message' => "Draft saved. {$intern->name}'s appraisal is not sent until you submit it."]);
+        }
+        $first = !$old || $old->mode === 'draft';   // submitting a draft is the first real submission
+        Activity::record($auth, 'Evaluation ' . ($first ? 'submitted' : 'updated') . " ({$data['mode']})", $intern->name, $request);
         try {
             Notifier::toUser($intern->id, 'Evaluation submitted', 'Your HTE supervisor\'s evaluation of your internship was submitted.', 'evaluation');
             if ($auth->role === 'supervisor') {
@@ -149,7 +162,8 @@ class EvaluationController extends Controller
     public function mine(Request $request)
     {
         $auth = $this->auth($request);
-        $e = Schema::hasTable('evaluations') ? DB::table('evaluations')->where('intern_id', $auth->id)->first() : null;
+        $e = \App\Services\SchemaCache::has('evaluations') ? DB::table('evaluations')->where('intern_id', $auth->id)->first() : null;
+        if ($e && $e->mode === 'draft') $e = null;   // a draft is not submitted yet
         return response()->json($e ? ['submitted' => true, 'mode' => $e->mode, 'evaluator_name' => $e->evaluator_name, 'updated_at' => $e->updated_at]
                                    : ['submitted' => false]);
     }

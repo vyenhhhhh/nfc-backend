@@ -44,7 +44,9 @@ class SchoolEventController extends Controller
         $d     = Carbon::parse($data['date'], 'Asia/Manila');
 
         if ($auth->role !== 'intern') return response()->json(['message' => 'Only interns can file this.'], 403);
-        if ($d->isWeekend()) return response()->json(['message' => 'That day is a ' . $d->format('l') . '. Pick a weekday.'], 422);
+        if (\App\Services\CalendarDays::closedWeekend($d->toDateString(), $auth->id)) {
+            return response()->json(['message' => 'That day is a ' . $d->format('l') . '. Pick a workday (a weekday, or a weekend day your HTE marked open).'], 422);
+        }
         if ($d->lt($today->copy()->subDays(30))) return response()->json(['message' => 'You can only file for the last 30 days or upcoming days.'], 422);
         if ($d->gt($today->copy()->addDays(60))) return response()->json(['message' => 'That date is too far ahead.'], 422);
         if (DB::table('school_event_excuses')->where('user_id', $auth->id)->where('date', $data['date'])
@@ -94,8 +96,9 @@ class SchoolEventController extends Controller
         if (!$row || (int) $row->user_id !== (int) $this->auth($request)->id) {
             return response()->json(['message' => 'Request not found.'], 404);
         }
-        if (!in_array($row->status, ['pending', 'endorsed'], true)) {
-            return response()->json(['message' => 'Only waiting requests can be removed.'], 409);
+        // once the supervisor has confirmed it, it can no longer be taken back
+        if ($row->status !== 'pending') {
+            return response()->json(['message' => 'Only requests your supervisor has not checked yet can be removed.'], 409);
         }
         if (!empty($row->proof_path)) {
             \App\Services\PrivateFiles::delete($row->proof_path);

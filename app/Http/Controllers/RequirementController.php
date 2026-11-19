@@ -162,8 +162,9 @@ class RequirementController extends Controller
         // post-internship requirements only count interns who finished their hours (worked out once each)
         $postOpen = [];
         if (in_array('post', array_column($wanted, 0), true)) {
+            $hoursOf = OjtHours::renderedMany($interns->pluck('id')->all());   // one query for every intern
             foreach ($interns as $u) {
-                $postOpen[(int) $u->id] = \App\Services\OjtCompletion::done($u, OjtHours::rendered((int) $u->id), $this->requiredHours($u->program, $u->prior_hours ?? 0));
+                $postOpen[(int) $u->id] = \App\Services\OjtCompletion::done($u, $hoursOf[(int) $u->id] ?? 0, $this->requiredHours($u->program, $u->prior_hours ?? 0));
             }
         }
 
@@ -221,13 +222,14 @@ class RequirementController extends Controller
         $started = $phase === 'pre' ? [] : $this->startedInterns();
 
         $out = [];
+        $hoursOf = $phase === 'post' ? OjtHours::renderedMany($interns->pluck('id')->all()) : [];   // one query for every intern
         foreach ($interns as $u) {
             if (isset($done[(int) $u->id])) continue;
             // during / post: only interns whose internship has started (all pre-internship requirements approved)
             if ($phase !== 'pre' && !isset($started[(int) $u->id])) continue;
             // post-internship requirements only open after the required hours are done
             if ($phase === 'post'
-                && !\App\Services\OjtCompletion::done($u, OjtHours::rendered((int) $u->id), $this->requiredHours($u->program, $u->prior_hours ?? 0))) {
+                && !\App\Services\OjtCompletion::done($u, $hoursOf[(int) $u->id] ?? 0, $this->requiredHours($u->program, $u->prior_hours ?? 0))) {
                 continue;
             }
             $out[] = (int) $u->id;

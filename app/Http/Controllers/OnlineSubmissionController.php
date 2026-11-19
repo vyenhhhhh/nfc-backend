@@ -75,7 +75,8 @@ class OnlineSubmissionController extends Controller
         }
 
         // same day rules as the kiosk (config/ojt.php)
-        if (config('ojt.block_weekends', false) && $date->isWeekend()) {
+        // a Saturday / Sunday is closed unless the intern's HTE marked it "We're open"
+        if (config('ojt.block_weekends', false) && \App\Services\CalendarDays::closedWeekend($date->toDateString(), $request->user_id)) {
             return response()->json(['message' => 'Online attendance is not accepted on ' . $date->format('l') . 's.'], 422);
         }
         if (config('ojt.block_holidays', false)) {

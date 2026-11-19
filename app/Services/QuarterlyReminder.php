@@ -16,7 +16,7 @@ class QuarterlyReminder
     public static function check(int $userId): void
     {
         try {
-            if (!Schema::hasTable('quarterly_reports') || !Schema::hasTable('notifications')) return;
+            if (!\App\Services\SchemaCache::has('quarterly_reports') || !\App\Services\SchemaCache::has('notifications')) return;
             $now = Carbon::now('Asia/Manila');
             // only during the first month of a new quarter (Jan, Apr, Jul, Oct)
             if (($now->month - 1) % 3 !== 0) return;

@@ -43,7 +43,7 @@ class ReportController extends Controller
     private static function hasHtes(): bool
     {
         static $has = null;
-        if ($has === null) $has = \Illuminate\Support\Facades\Schema::hasColumn('report_schedules', 'htes');
+        if ($has === null) $has = \App\Services\SchemaCache::has('report_schedules', 'htes');
         return $has;
     }
 

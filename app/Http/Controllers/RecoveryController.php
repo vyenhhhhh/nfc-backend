@@ -108,7 +108,7 @@ class RecoveryController extends Controller
         DB::table('users')->where('id', $user->id)->update(array_merge([
             'password'   => Hash::make($request->new_password),
             'updated_at' => Carbon::now('Asia/Manila'),
-        ], Schema::hasColumn('users', 'must_change_password') ? ['must_change_password' => false] : []));
+        ], \App\Services\SchemaCache::has('users', 'must_change_password') ? ['must_change_password' => false] : []));
 
         // sign out every other device, keep this one
         $auth = $request->attributes->get('auth_user');
@@ -180,7 +180,7 @@ class RecoveryController extends Controller
         DB::table('users')->where('id', $pass->user_id)->update(array_merge([
             'password'   => Hash::make($request->new_password),
             'updated_at' => Carbon::now('Asia/Manila'),
-        ], Schema::hasColumn('users', 'must_change_password') ? ['must_change_password' => false] : []));
+        ], \App\Services\SchemaCache::has('users', 'must_change_password') ? ['must_change_password' => false] : []));
 
         DB::table('recovery_resets')->where('user_id', $pass->user_id)->delete();
         $this->codeFor($pass->user_id, true);                                    // the old code is used up

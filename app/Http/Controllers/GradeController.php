@@ -31,10 +31,21 @@ class GradeController extends Controller
     }
 
     /** days present and late days (time in after 8:00) from the attendance log */
-    private static function attendance(int $userId): array
+    /** Days present and days late of many interns with ONE query: [user_id => ['days' => n, 'late' => n]] */
+    private static function attendanceMany(array $userIds): array
+    {
+        $out = [];
+        foreach ($userIds as $id) $out[(int) $id] = ['days' => 0, 'late' => 0];
+        if (!$userIds) return $out;
+        $rows = DB::table('attendance_records')->whereIn('user_id', $userIds)->whereNotNull('checked_in_at')
+            ->orderBy('checked_in_at')->get(['user_id', 'date', 'checked_in_at']);
+        foreach ($rows->groupBy('user_id') as $uid => $userRows) $out[(int) $uid] = self::countAttendance($userRows);
+        return $out;
+    }
+
+    private static function countAttendance($rows): array
     {
         $lateAfter = config('ojt.grading.late_after', '08:00');
-        $rows = DB::table('attendance_records')->where('user_id', $userId)->whereNotNull('checked_in_at')->get(['date', 'checked_in_at']);
         $days = []; $late = 0;
         foreach ($rows as $r) {
             $d = (string) $r->date;
@@ -63,27 +74,31 @@ class GradeController extends Controller
         if (($auth->role ?? '') === 'admin') {
             return response()->json(['message' => 'Internship grades are handled by the OJT coordinator and the HTE supervisors.'], 403);
         }
-        $ready = Schema::hasTable('intern_grades') && Schema::hasTable('evaluations');
+        $ready = \App\Services\SchemaCache::has('intern_grades') && \App\Services\SchemaCache::has('evaluations');
         $q = DB::table('users')->where('role', 'intern');
         if ($auth->role === 'supervisor') $q->where('supervisor_id', $auth->id);
         $interns = $q->orderBy('name')->get();
         $ids = $interns->pluck('id')->all();
 
-        $evals = Schema::hasTable('evaluations') ? DB::table('evaluations')->whereIn('intern_id', $ids)->get()->keyBy('intern_id') : collect();
-        $grades = Schema::hasTable('intern_grades') ? DB::table('intern_grades')->whereIn('intern_id', $ids)->get()->keyBy('intern_id') : collect();
+        $evals = \App\Services\SchemaCache::has('evaluations') ? DB::table('evaluations')->whereIn('intern_id', $ids)->get()->keyBy('intern_id') : collect();
+        $grades = \App\Services\SchemaCache::has('intern_grades') ? DB::table('intern_grades')->whereIn('intern_id', $ids)->get()->keyBy('intern_id') : collect();
         $sups = DB::table('users')->whereIn('id', $interns->pluck('supervisor_id')->filter()->unique()->all())->pluck('name', 'id');
         // the HTE's address (on the supervisor's account) for "Address of Company" on form F-OSIP-PAR-004
         $supAddr = \App\Services\SchemaCache::has('users', 'hte_address')
             ? DB::table('users')->whereIn('id', $interns->pluck('supervisor_id')->filter()->unique()->all())->pluck('hte_address', 'id') : collect();
 
         $docs = [];
-        if ($auth->role !== 'supervisor' && Schema::hasTable('movs')) {
+        if ($auth->role !== 'supervisor' && \App\Services\SchemaCache::has('movs')) {
             foreach (DB::table('movs')->whereIn('user_id', $ids)->whereIn('requirement', self::DOCS)->orderBy('created_at')->get() as $m) {
                 $docs[$m->user_id][$m->requirement] = ['status' => $m->status, 'file_path' => $m->file_path, 'original_name' => $m->original_name ?? null, 'created_at' => $m->created_at];
             }
         }
 
-        $rows = $interns->map(function ($u) use ($evals, $grades, $sups, $docs) {
+        $mine = $auth->role === 'supervisor';
+        // hours and attendance of every intern in two queries (not two per intern)
+        $hoursOf = OjtHours::renderedMany($ids);
+        $attOf   = self::attendanceMany($ids);
+        $rows = $interns->map(function ($u) use ($evals, $grades, $sups, $docs, $supAddr, $mine, $hoursOf, $attOf) {
             $e = $evals[$u->id] ?? null;
             $g = $grades[$u->id] ?? null;
             $sup = $e && $e->mode === 'system' ? Grading::supervisor($e->ratings) : ['total' => null, 'categories' => []];
@@ -93,12 +108,17 @@ class GradeController extends Controller
                 'placement' => $u->placement ?? null, 'photo' => $u->photo ?? null, 'semester' => $u->semester ?? null, 'tracking_type' => $u->tracking_type ?? 'hours',
                 'supervisor_id' => $u->supervisor_id ? (int) $u->supervisor_id : null, 'supervisor_name' => $u->supervisor_id ? ($sups[$u->supervisor_id] ?? null) : null,
                 'hte_address' => $u->supervisor_id ? ($supAddr[$u->supervisor_id] ?? null) : null,
-                'hours' => round(OjtHours::rendered((int) $u->id), 2), 'required_hours' => self::requiredHours($u->program ?? null, $u->prior_hours ?? 0),
-                'attendance' => self::attendance((int) $u->id),
+                'hours' => round($hoursOf[(int) $u->id] ?? 0, 2), 'required_hours' => self::requiredHours($u->program ?? null, $u->prior_hours ?? 0),
+                'attendance' => $attOf[(int) $u->id] ?? ['days' => 0, 'late' => 0],
                 'appraisal' => $e && $e->mode === 'system' ? [
                     'id' => (int) $e->id, 'ratings' => json_decode($e->ratings ?: '{}', true), 'score' => $sup['total'], 'categories' => $sup['categories'],
                     'strengths' => $e->strengths, 'improvements' => $e->improvements, 'comments' => $e->comments, 'share_comments' => (bool) ($e->share_comments ?? true),
                     'evaluator_name' => $e->evaluator_name, 'updated_at' => $e->updated_at,
+                ] : null,
+                // the supervisor's own draft (not submitted yet): only the supervisor sees it
+                'draft' => $mine && $e && $e->mode === 'draft' ? [
+                    'ratings' => json_decode($e->ratings ?: '{}', true), 'strengths' => $e->strengths, 'improvements' => $e->improvements,
+                    'comments' => $e->comments, 'share_comments' => (bool) ($e->share_comments ?? true), 'updated_at' => $e->updated_at,
                 ] : null,
                 'grade' => $g ? [
                     'ratings' => json_decode($g->ratings ?: '{}', true), 'coordinator_score' => $coord['total'], 'categories' => $coord['categories'],
@@ -113,10 +133,31 @@ class GradeController extends Controller
         return response()->json(['ready' => $ready, 'interns' => $rows]);
     }
 
+    // GET /api/grades/summary   (OJT coordinator: the sidebar count on Grades)
+    // ready = the supervisor submitted the appraisal, the hours are complete, and the grade is not released yet
+    public function summary(Request $request)
+    {
+        if (!\App\Services\SchemaCache::has('evaluations') || !\App\Services\SchemaCache::has('intern_grades')) return response()->json(['ready' => 0]);
+        $released = DB::table('intern_grades')->whereNotNull('finalized_at')->pluck('intern_id')->map(fn ($v) => (int) $v)->all();
+        $ready = 0;
+        $evals = DB::table('evaluations')->where('mode', 'system')->get(['intern_id', 'ratings'])
+            ->filter(fn ($e) => !in_array((int) $e->intern_id, $released, true) && Grading::supervisor($e->ratings)['total'] !== null);
+        $ids = $evals->pluck('intern_id')->map(fn ($v) => (int) $v)->all();
+        $users = $ids ? DB::table('users')->whereIn('id', $ids)->where('role', 'intern')->get(['id', 'program', 'prior_hours'])->keyBy('id') : collect();
+        $hoursOf = OjtHours::renderedMany($ids);   // one query for all of them
+        foreach ($ids as $id) {
+            $u = $users[$id] ?? null;
+            if (!$u) continue;
+            $required = self::requiredHours($u->program ?? null, $u->prior_hours ?? 0);
+            if (($hoursOf[$id] ?? 0) + 0.01 >= $required) $ready++;
+        }
+        return response()->json(['ready' => $ready]);
+    }
+
     // PUT /api/grades/{internId}   (OJT coordinator)  { ratings{}, remarks, finalize: bool }
     public function save(Request $request, $internId)
     {
-        if (!Schema::hasTable('intern_grades')) return response()->json(['message' => 'Run "php artisan migrate" on the server first.'], 500);
+        if (!\App\Services\SchemaCache::has('intern_grades')) return response()->json(['message' => 'Run "php artisan migrate" on the server first.'], 500);
         $auth = $this->auth($request);
         $data = $request->validate(['ratings' => 'nullable|array', 'remarks' => 'nullable|string|max:3000', 'finalize' => 'nullable|boolean']);
         $intern = DB::table('users')->where('id', $internId)->where('role', 'intern')->first();
@@ -135,6 +176,12 @@ class GradeController extends Controller
         if ($finalize) {
             if ($sup['total'] === null) return response()->json(['message' => "The HTE supervisor hasn't finished the appraisal of {$intern->name} yet."], 422);
             if ($coord['total'] === null) return response()->json(['message' => 'Rate every item of your part before releasing the grade.'], 422);
+            // the grade is released only after the intern has completed the required hours
+            $required = self::requiredHours($intern->program ?? null, $intern->prior_hours ?? 0);
+            $rendered = round(OjtHours::rendered((int) $intern->id), 2);
+            if ($required > 0 && $rendered + 0.01 < $required) {
+                return response()->json(['message' => "{$intern->name} has rendered {$rendered} of {$required} hours. Save a draft now and release the grade once the required hours are complete."], 422);
+            }
         }
 
         $now = Carbon::now('Asia/Manila');
@@ -157,7 +204,7 @@ class GradeController extends Controller
     public function reopen(Request $request, $internId)
     {
         $auth = $this->auth($request);
-        $g = Schema::hasTable('intern_grades') ? DB::table('intern_grades')->where('intern_id', $internId)->first() : null;
+        $g = \App\Services\SchemaCache::has('intern_grades') ? DB::table('intern_grades')->where('intern_id', $internId)->first() : null;
         if (!$g) return response()->json(['message' => 'Not found.'], 404);
         DB::table('intern_grades')->where('id', $g->id)->update(['finalized_at' => null, 'updated_at' => Carbon::now('Asia/Manila')]);
         $name = DB::table('users')->where('id', $internId)->value('name');
@@ -169,8 +216,8 @@ class GradeController extends Controller
     public function mine(Request $request)
     {
         $auth = $this->auth($request);
-        $g = Schema::hasTable('intern_grades') ? DB::table('intern_grades')->where('intern_id', $auth->id)->first() : null;
-        $e = Schema::hasTable('evaluations') ? DB::table('evaluations')->where('intern_id', $auth->id)->first() : null;
+        $g = \App\Services\SchemaCache::has('intern_grades') ? DB::table('intern_grades')->where('intern_id', $auth->id)->first() : null;
+        $e = \App\Services\SchemaCache::has('evaluations') ? DB::table('evaluations')->where('intern_id', $auth->id)->first() : null;
         $appraisalDone = $e && $e->mode === 'system' && Grading::supervisor($e->ratings)['total'] !== null;
         if (!$g || !$g->finalized_at) return response()->json(['released' => false, 'appraisal_done' => $appraisalDone]);
 
