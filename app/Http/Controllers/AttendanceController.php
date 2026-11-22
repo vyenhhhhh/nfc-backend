@@ -941,6 +941,20 @@ class AttendanceController extends Controller
     //        outbound = a CSU student interning with a foreign HTE (abroad, or virtually for a foreign company)
     // A virtual intern has no kiosk, so their work mode becomes offsite (they log days through Submit Online);
     // an on-site intern goes back to onsite. Hybrid keeps whatever the day-to-day work mode is.
+    // PATCH /api/supervisor/interns/{id}/modality   { modality: onsite | hybrid | virtual | project | hte }
+    // The HTE supervisor changes the modality of one of their own interns (the coordinator and admin can too).
+    // Only the modality: the scope is not accepted here, it stays with the OJT coordinator (setPlacement).
+    public function setModality(Request $request, $id)
+    {
+        $request->validate(['modality' => 'required|in:onsite,hybrid,virtual,project,hte']);
+        $auth = $request->attributes->get('auth_user');
+        if ($auth && $auth->role === 'supervisor' && !Supervision::supervises($auth, $id)) {
+            return response()->json(['message' => 'You can only change the modality of your own interns.'], 403);
+        }
+        $request->replace(['modality' => $request->input('modality')]);   // drop anything else, such as a scope
+        return $this->setPlacement($request, $id);
+    }
+
     public function setPlacement(Request $request, $id)
     {
         if (!\App\Services\SchemaCache::has('users', 'modality')) {

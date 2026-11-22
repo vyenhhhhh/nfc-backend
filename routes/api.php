@@ -154,6 +154,9 @@ Route::middleware($staff)->group(function () {
     Route::patch('/users/{id}/settings', [AttendanceController::class, 'updateSettings']);
     // DTR type (2 or 4 taps): the HTE decides, so the intern's supervisor sets it (admin / coordinator can too)
     Route::patch('/supervisor/interns/{id}/dtr-mode', [AccountController::class, 'setDtrMode']);
+    // internship modality of one intern (on-site / hybrid / virtual / project-based): the HTE supervisor sets it for their own
+    // interns; the scope (local / out-of-region / inbound / outbound) stays with the OJT coordinator
+    Route::patch('/supervisor/interns/{id}/modality', [AttendanceController::class, 'setModality'])->whereNumber('id');
     // project-based interns: the supervisor marks the project complete, then the coordinator confirms it
     Route::post('/interns/{id}/project/mark',      [ProjectController::class, 'mark'])->whereNumber('id');
     Route::delete('/interns/{id}/project/mark',    [ProjectController::class, 'unmark'])->whereNumber('id');
