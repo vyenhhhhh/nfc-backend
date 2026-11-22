@@ -27,6 +27,11 @@ return [
         'key' => env('RESEND_API_KEY'),
     ],
 
+    // email through Brevo's web API (see config/mail.php, mailer "brevo")
+    'brevo' => [
+        'key' => env('BREVO_API_KEY'),
+    ],
+
     'ses' => [
         'key' => env('AWS_ACCESS_KEY_ID'),
         'secret' => env('AWS_SECRET_ACCESS_KEY'),

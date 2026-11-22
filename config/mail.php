@@ -65,6 +65,12 @@ return [
             'transport' => 'resend',
         ],
 
+        // Render's free plan blocks the SMTP ports, so email goes out through Brevo's web API instead
+        // (MAIL_MAILER=brevo and BREVO_API_KEY on Render). See app/Mail/BrevoTransport.php.
+        'brevo' => [
+            'transport' => 'brevo',
+        ],
+
         'sendmail' => [
             'transport' => 'sendmail',
             'path' => env('MAIL_SENDMAIL_PATH', '/usr/sbin/sendmail -bs -i'),
