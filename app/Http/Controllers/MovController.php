@@ -249,6 +249,74 @@ class MovController extends Controller
     }
 
     // Required hours for a program such as "BSIT - 4" (set in config/ojt.php)
+    // GET /api/coordinator/narrative-reports?ids=1,2,3
+    // Every APPROVED narrative report of the interns shown on the Requirements tracker, in one ZIP
+    // (the "consolidated narrative report"). Files: BSIT_Hermoso_Vivien_221-02399.pdf
+    public function narrativeZip(Request $request)
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', explode(',', (string) $request->query('ids', ''))))));
+        if (!$ids) return response()->json(['message' => 'No intern selected.'], 422);
+        if (!class_exists(\ZipArchive::class)) return response()->json(['message' => 'The server cannot make ZIP files.'], 500);
+
+        // the newest approved narrative report of each intern
+        $rows = DB::table('movs as m')
+            ->join('users as u', 'u.id', '=', 'm.user_id')
+            ->whereIn('m.user_id', $ids)
+            ->where('m.requirement', 'narrative_report')
+            ->where('m.status', 'approved')
+            ->orderByDesc('m.created_at')
+            ->select('m.user_id', 'm.file_path', 'm.original_name', 'u.name', 'u.student_id', 'u.program')
+            ->get()
+            ->unique('user_id')
+            ->values();
+        if ($rows->isEmpty()) return response()->json(['message' => 'None of these interns has an approved narrative report yet.'], 404);
+
+        $tmp = tempnam(sys_get_temp_dir(), 'narr');
+        $zip = new \ZipArchive();
+        if ($zip->open($tmp, \ZipArchive::OVERWRITE) !== true) return response()->json(['message' => "Couldn't make the ZIP file."], 500);
+
+        $clean = fn ($v) => trim(preg_replace('/[^A-Za-z0-9-]+/', '_', (string) $v), '_');
+        $used = []; $added = 0; $missing = [];
+        foreach ($rows as $r) {
+            $bytes = null;
+            try { $d = \App\Services\PrivateFiles::disk(); if ($d->exists($r->file_path)) $bytes = $d->get($r->file_path); } catch (\Throwable $e) { report($e); }
+            if ($bytes === null) {
+                try { $p = \App\Services\PrivateFiles::publicDisk(); if ($p->exists($r->file_path)) $bytes = $p->get($r->file_path); } catch (\Throwable $e) { report($e); }
+            }
+            if ($bytes === null) { $missing[] = $r->name; continue; }
+
+            $prog = self::programKey($r->program) ?? 'Other';
+            $parts = array_map('trim', explode(',', (string) $r->name, 2));   // "Hermoso, Vivien" or "Vivien Hermoso"
+            $person = count($parts) === 2 ? $parts[0] . '_' . $parts[1] : $r->name;
+            $ext = strtolower(pathinfo((string) ($r->original_name ?: $r->file_path), PATHINFO_EXTENSION)) ?: 'pdf';
+            $base = implode('_', array_filter([$prog, $clean($person), $clean($r->student_id)]));
+            $name = $base . '.' . $ext;
+            for ($i = 2; isset($used[strtolower($name)]); $i++) $name = "{$base}_{$i}.{$ext}";
+            $used[strtolower($name)] = true;
+            $zip->addFromString($name, $bytes);
+            $added++;
+        }
+        if ($missing) $zip->addFromString('_NOT_FOUND.txt', "These files could not be found on the server:\r\n- " . implode("\r\n- ", $missing) . "\r\n");
+        $zip->close();
+
+        if (!$added) { @unlink($tmp); return response()->json(['message' => "The files couldn't be found on the server."], 404); }
+
+        $progs = $rows->map(fn ($r) => self::programKey($r->program))->filter()->unique()->values();
+        $file = 'Narrative_Reports_' . ($progs->count() === 1 ? $progs[0] . '_' : '') . now()->format('Y-m-d') . '.zip';
+        try { \App\Services\Activity::record($request->attributes->get('auth_user'), 'Narrative reports downloaded', "{$added} file(s) · {$file}", $request); } catch (\Throwable $e) { /* best-effort */ }
+
+        return response()->download($tmp, $file, ['Content-Type' => 'application/zip'])->deleteFileAfterSend(true);
+    }
+
+    private static function programKey(?string $program): ?string
+    {
+        $p = strtoupper((string) $program);
+        if (preg_match('/BSIT|INFORMATION\s+TECH/', $p)) return 'BSIT';
+        if (preg_match('/BSIS|INFORMATION\s+SYS/', $p)) return 'BSIS';
+        if (preg_match('/BSCS|COMPUTER\s+SCI/', $p)) return 'BSCS';
+        return null;
+    }
+
     private function requiredHours(?string $program, $prior = 0): float
     {
         $p = strtoupper((string) $program);

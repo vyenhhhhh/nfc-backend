@@ -247,6 +247,7 @@ Route::middleware($coordinator)->group(function () {
     Route::get('/coordinator/movs',              [MovController::class, 'index']);
     Route::post('/coordinator/movs/{id}/review', [MovController::class, 'review']);
     Route::post('/coordinator/movs/{id}/undo',   [MovController::class, 'undoReview']);   // take back a review made by mistake
+    Route::get('/coordinator/narrative-reports', [MovController::class, 'narrativeZip']);   // the approved narrative reports, in one ZIP
 
     // online attendance review + history
     Route::get('/supervisor/pending',   [OnlineSubmissionController::class, 'pending']);
