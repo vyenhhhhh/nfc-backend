@@ -198,7 +198,7 @@ class OnlineSubmissionController extends Controller
             ->whereIn('os.status', ['pending', 'endorsed'])
             ->orderByRaw("CASE os.status WHEN 'endorsed' THEN 0 ELSE 1 END")
             ->orderByDesc('os.created_at')
-            ->select('os.*', 'u.name as intern_name', 'u.email as intern_email', 'u.photo as intern_photo',
+            ->select('os.*', 'u.name as intern_name', 'u.placement as intern_placement', 'u.email as intern_email', 'u.photo as intern_photo',
                 'u.supervisor_id', 'e.name as endorser_name', 's.name as supervisor_name')
             ->get();
 
@@ -217,7 +217,7 @@ class OnlineSubmissionController extends Controller
                 'os.id', 'os.user_id', 'os.date', 'os.description', 'os.status', 'os.endorsed_by', 'os.endorse_remarks', 'os.proof_path', 'os.proof_name',
                 'os.created_at as submitted_at', 'e.name as endorser_name',
                 DB::raw("CASE WHEN os.status = 'rejected' AND EXISTS (SELECT 1 FROM validation_logs vl2 WHERE vl2.submission_id = os.id AND vl2.supervisor_id = os.endorsed_by) THEN 'supervisor' WHEN os.status = 'rejected' THEN 'coordinator' END as rejected_by"),
-                'u.name as intern_name', 'u.email as intern_email', 'u.photo as intern_photo',
+                'u.name as intern_name', 'u.placement as intern_placement', 'u.email as intern_email', 'u.photo as intern_photo',
                 DB::raw('(SELECT vl.remarks FROM validation_logs vl
                           WHERE vl.submission_id = os.id ORDER BY vl.created_at DESC LIMIT 1) as remarks'),
                 DB::raw('(SELECT vl.created_at FROM validation_logs vl

@@ -136,7 +136,7 @@ class SchoolEventController extends Controller
         $q = DB::table('school_event_excuses as e')
             ->join('users as u', 'u.id', '=', 'e.user_id')
             ->leftJoin('users as r', 'r.id', '=', 'e.reviewed_by')
-            ->select('e.*', 'u.name as intern_name', 'u.email as intern_email', 'u.photo as intern_photo',
+            ->select('e.*', 'u.name as intern_name', 'u.placement as intern_placement', 'u.email as intern_email', 'u.photo as intern_photo',
                 'u.supervisor_id', 'r.name as reviewer_name');
         if ($scope !== null) $q->whereIn('e.user_id', $scope);
 

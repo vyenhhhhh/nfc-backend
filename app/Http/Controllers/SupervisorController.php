@@ -43,7 +43,7 @@ class SupervisorController extends Controller
                     'a.id', 'a.user_id', 'a.date', 'a.checked_in_at', 'a.checked_out_at',
                     'a.ot_minutes', 'a.ot_status', 'a.ot_endorsed_minutes', 'a.ot_endorse_remarks', 'a.ot_endorsed_at',
                     'a.ot_approved_minutes', 'a.ot_remarks', 'a.ot_reviewed_at',
-                    'u.name as intern_name', 'u.email as intern_email', 'u.photo as intern_photo',
+                    'u.name as intern_name', 'u.placement as intern_placement', 'u.email as intern_email', 'u.photo as intern_photo',
                     'r.name as reviewer_name'
                 )
                 ->orderByRaw("CASE a.ot_status WHEN 'pending' THEN 0 WHEN 'endorsed' THEN 1 ELSE 2 END")
@@ -125,7 +125,7 @@ class SupervisorController extends Controller
                 ->leftJoin('users as r', 'r.id', '=', 'c.reviewed_by')
                 ->whereIn('c.user_id', $scope)
                 ->select('c.*', 'a.checked_in_at',
-                    'u.name as intern_name', 'u.email as intern_email', 'u.photo as intern_photo',
+                    'u.name as intern_name', 'u.placement as intern_placement', 'u.email as intern_email', 'u.photo as intern_photo',
                     'r.name as reviewer_name')
                 ->orderByRaw("CASE c.status WHEN 'pending' THEN 0 WHEN 'endorsed' THEN 1 ELSE 2 END")
                 ->orderByDesc('c.date')
@@ -263,7 +263,7 @@ class SupervisorController extends Controller
                 ->whereIn('os.user_id', $scope)
                 ->select('os.id', 'os.user_id', 'os.date', 'os.description', 'os.status', 'os.endorse_remarks', 'os.proof_path', 'os.proof_name', 'os.endorsed_at', 'os.endorsed_by', 'os.created_at as submitted_at',
                     DB::raw("CASE WHEN os.status = 'rejected' AND EXISTS (SELECT 1 FROM validation_logs vl WHERE vl.submission_id = os.id AND vl.supervisor_id = os.endorsed_by) THEN 'supervisor' WHEN os.status = 'rejected' THEN 'coordinator' END as rejected_by"),
-                    'u.name as intern_name', 'u.email as intern_email', 'u.photo as intern_photo')
+                    'u.name as intern_name', 'u.placement as intern_placement', 'u.email as intern_email', 'u.photo as intern_photo')
                 ->orderByRaw("CASE os.status WHEN 'pending' THEN 0 WHEN 'endorsed' THEN 1 ELSE 2 END")
                 ->orderByDesc('os.date')
                 ->get()

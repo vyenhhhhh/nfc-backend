@@ -31,7 +31,7 @@ class OvertimeController extends Controller
                 'a.id', 'a.user_id', 'a.date', 'a.checked_in_at', 'a.checked_out_at',
                 'a.ot_minutes', 'a.ot_status', 'a.ot_approved_minutes', 'a.ot_remarks', 'a.ot_reviewed_at',
                 'a.ot_endorsed_minutes', 'a.ot_endorse_remarks', 'a.ot_endorsed_at',
-                'u.name as intern_name', 'u.email as intern_email', 'u.photo as intern_photo', 'u.supervisor_id',
+                'u.name as intern_name', 'u.placement as intern_placement', 'u.email as intern_email', 'u.photo as intern_photo', 'u.supervisor_id',
                 'r.name as reviewer_name', 'e.name as endorser_name', 's.name as supervisor_name'
             )
             ->orderByRaw("CASE a.ot_status WHEN 'endorsed' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END")
