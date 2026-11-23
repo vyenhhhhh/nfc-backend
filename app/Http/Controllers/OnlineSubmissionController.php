@@ -91,10 +91,12 @@ class OnlineSubmissionController extends Controller
             }
         }
 
-        // Check if already submitted for this date
+        // Check if already submitted for this date (a REJECTED one doesn't count: the intern may submit that day again,
+        // the rejected one stays in the list as history)
         $existing = DB::table('online_submissions')
             ->where('user_id', $request->user_id)
             ->where('date', $request->date)
+            ->where('status', '!=', 'rejected')
             ->first();
 
         if ($existing) {
