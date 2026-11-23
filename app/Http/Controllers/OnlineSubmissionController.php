@@ -157,8 +157,11 @@ class OnlineSubmissionController extends Controller
                 'os.description',
                 'os.status',
                 'os.endorse_remarks',
+                'os.endorsed_at',
                 'os.proof_path',
                 'os.proof_name',
+                // who rejected it: the HTE supervisor (they logged the rejection) or the OJT coordinator
+                DB::raw("CASE WHEN os.status = 'rejected' AND EXISTS (SELECT 1 FROM validation_logs vl2 WHERE vl2.submission_id = os.id AND vl2.supervisor_id = os.endorsed_by) THEN 'supervisor' WHEN os.status = 'rejected' THEN 'coordinator' END as rejected_by"),
                 DB::raw('(SELECT vl.remarks FROM validation_logs vl
                           WHERE vl.submission_id = os.id
                           ORDER BY vl.created_at DESC LIMIT 1) as remarks')
