@@ -225,6 +225,10 @@ class MovController extends Controller
 
         $mov = DB::table('movs')->where('id', $id)->first();
         if (!$mov) return response()->json(['message' => 'Submission not found.'], 404);
+        // marked done by the HTE supervisor's online appraisal: it follows the appraisal, not a review
+        if (\App\Services\AppraisalRequirement::isOnline($mov)) {
+            return response()->json(['message' => "This was marked done when the HTE supervisor submitted the appraisal online, so it can't be undone here."], 409);
+        }
 
         $was = $mov->status;
         $changed = DB::table('movs')->where('id', $id)->whereIn('status', ['approved', 'rejected'])->update([

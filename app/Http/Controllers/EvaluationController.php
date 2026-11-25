@@ -134,6 +134,10 @@ class EvaluationController extends Controller
         }
         $first = !$old || $old->mode === 'draft';   // submitting a draft is the first real submission
         Activity::record($auth, 'Evaluation ' . ($first ? 'submitted' : 'updated') . " ({$data['mode']})", $intern->name, $request);
+        // the intern's "Student Trainee Performance Appraisal" requirement is done now (no upload needed from the intern)
+        try {
+            \App\Services\AppraisalRequirement::markDone((int) $intern->id, (int) $auth->id, $auth->name, $auth->role, $now);
+        } catch (\Throwable $e) { /* the appraisal itself is saved; the checklist mark is best-effort */ }
         try {
             Notifier::toUser($intern->id, 'Evaluation submitted', 'Your HTE supervisor\'s evaluation of your internship was submitted.', 'evaluation');
             if ($auth->role === 'supervisor') {
@@ -154,6 +158,8 @@ class EvaluationController extends Controller
         if (!$this->allowed($auth, $intern)) return response()->json(['message' => 'Not allowed.'], 403);
         \App\Services\PrivateFiles::delete($e->file_path);
         DB::table('evaluations')->where('id', $id)->delete();
+        // the appraisal requirement it had marked done goes back to "Not submitted"
+        try { \App\Services\AppraisalRequirement::clear((int) $e->intern_id); } catch (\Throwable $ex) { /* best-effort */ }
         Activity::record($auth, 'Evaluation removed', $intern->name ?? '', $request);
         return response()->json(['message' => 'Evaluation removed.']);
     }

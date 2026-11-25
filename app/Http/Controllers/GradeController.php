@@ -104,6 +104,8 @@ class GradeController extends Controller
         $docs = [];
         if ($auth->role !== 'supervisor' && \App\Services\SchemaCache::has('movs')) {
             foreach (DB::table('movs')->whereIn('user_id', $ids)->whereIn('requirement', self::DOCS)->orderBy('created_at')->get() as $m) {
+                if (\App\Services\AppraisalRequirement::isOnline($m)) continue;   // no file: the appraisal itself is shown above
+
                 $docs[$m->user_id][$m->requirement] = ['status' => $m->status, 'file_path' => $m->file_path, 'original_name' => $m->original_name ?? null, 'created_at' => $m->created_at];
             }
         }
