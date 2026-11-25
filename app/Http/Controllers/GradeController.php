@@ -258,7 +258,9 @@ class GradeController extends Controller
         $sup['total'] = $supScore;
         return response()->json([
             'released' => true, 'final_grade' => (float) $g->final_grade, 'equivalent' => Grading::equivalent((float) $g->final_grade), 'released_at' => $g->finalized_at,
+            // paper = the OJT coordinator encoded the HTE supervisor's signed paper appraisal (the coordinator only typed it in)
             'supervisor' => ['score' => $sup['total'], 'categories' => $sup['categories'], 'by' => $e->evaluator_name ?? null,
+                             'paper' => ($e->evaluator_role ?? null) === 'ojt_coordinator',
                              'strengths' => ($e->share_comments ?? true) ? ($e->strengths ?? null) : null,
                              'improvements' => ($e->share_comments ?? true) ? ($e->improvements ?? null) : null],
             'coordinator' => ['score' => $coord['total'], 'categories' => $coord['categories'], 'by' => $g->graded_by_name],
