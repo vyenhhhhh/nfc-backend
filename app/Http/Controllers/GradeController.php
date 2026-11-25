@@ -134,7 +134,7 @@ class GradeController extends Controller
                 'appraisal' => $e && $e->mode === 'system' ? [
                     'id' => (int) $e->id, 'ratings' => json_decode($e->ratings ?: '{}', true), 'score' => $sup['total'], 'categories' => $sup['categories'],
                     'strengths' => $e->strengths, 'improvements' => $e->improvements, 'comments' => $e->comments, 'share_comments' => (bool) ($e->share_comments ?? true),
-                    'evaluator_name' => $e->evaluator_name, 'updated_at' => $e->updated_at,
+                    'evaluator_name' => $e->evaluator_name, 'evaluator_role' => $e->evaluator_role, 'updated_at' => $e->updated_at,
                 ] : null,
                 // the supervisor's own draft (not submitted yet): only the supervisor sees it
                 'draft' => $mine && $e && $e->mode === 'draft' ? [

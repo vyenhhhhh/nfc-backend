@@ -17,6 +17,9 @@ use Illuminate\Support\Facades\Storage;
  *   paper  = the signed paper form is scanned / photographed and uploaded
  *            (by the supervisor, or by the coordinator when the supervisor hands in paper)
  * One evaluation per intern; submitting again replaces it. The criteria are in config/ojt.php.
+ * When the HTE supervisor fills in the paper form instead, the intern uploads the signed copy as the
+ * "Student Trainee Performance Appraisal" requirement and the OJT coordinator encodes its ratings here
+ * (evaluator_role = ojt_coordinator), so it counts toward the grade like an online appraisal.
  */
 class EvaluationController extends Controller
 {
@@ -92,6 +95,22 @@ class EvaluationController extends Controller
 
         $old = DB::table('evaluations')->where('intern_id', $intern->id)->first();
         $draft = (bool) ($data['draft'] ?? false) && $data['mode'] === 'system';
+
+        // the OJT coordinator encodes the HTE supervisor's signed paper appraisal (uploaded by the intern)
+        $encoding = $auth->role !== 'supervisor';
+        if ($encoding) {
+            if ($auth->role !== 'ojt_coordinator') return response()->json(['message' => 'Appraisals are handled by the OJT coordinator and the HTE supervisors.'], 403);
+            $draft = false;   // the coordinator copies a finished form: no drafts
+            if ($old && $old->mode !== 'draft' && $old->evaluator_role === 'supervisor') {
+                return response()->json(['message' => "The HTE supervisor already submitted {$intern->name}'s appraisal in the system, so there is nothing to encode."], 422);
+            }
+            $paper = \App\Services\SchemaCache::has('movs') && DB::table('movs')->where('user_id', $intern->id)
+                ->where('requirement', \App\Services\AppraisalRequirement::KEY)->whereIn('status', ['pending', 'approved'])
+                ->where('file_path', '!=', '')->exists();
+            if (!$paper) {
+                return response()->json(['message' => "{$intern->name} hasn't uploaded the signed paper appraisal yet (Student Trainee Performance Appraisal in Submit MOV). Encode it once it is uploaded."], 422);
+            }
+        }
         if ($draft && $old && $old->mode !== 'draft') {
             return response()->json(['message' => 'This appraisal was already submitted. Use Save changes instead.'], 422);
         }
@@ -133,18 +152,24 @@ class EvaluationController extends Controller
             return response()->json(['message' => "Draft saved. {$intern->name}'s appraisal is not sent until you submit it."]);
         }
         $first = !$old || $old->mode === 'draft';   // submitting a draft is the first real submission
-        Activity::record($auth, 'Evaluation ' . ($first ? 'submitted' : 'updated') . " ({$data['mode']})", $intern->name, $request);
+        Activity::record($auth, $encoding ? ('Encoded the paper appraisal' . ($first ? '' : ' (updated)'))
+            : 'Evaluation ' . ($first ? 'submitted' : 'updated') . " ({$data['mode']})", $intern->name, $request);
         // the intern's "Student Trainee Performance Appraisal" requirement is done now (no upload needed from the intern)
         try {
             \App\Services\AppraisalRequirement::markDone((int) $intern->id, (int) $auth->id, $auth->name, $auth->role, $now);
         } catch (\Throwable $e) { /* the appraisal itself is saved; the checklist mark is best-effort */ }
         try {
-            Notifier::toUser($intern->id, 'Evaluation submitted', 'Your HTE supervisor\'s evaluation of your internship was submitted.', 'evaluation');
+            if ($encoding) {
+                if ($first) Notifier::toUser($intern->id, 'Appraisal recorded', 'The OJT coordinator recorded your HTE supervisor\'s signed paper appraisal. It now counts toward your grade.', 'evaluation');
+            } else {
+                Notifier::toUser($intern->id, 'Evaluation submitted', 'Your HTE supervisor\'s evaluation of your internship was submitted.', 'evaluation');
+            }
             if ($auth->role === 'supervisor') {
                 Notifier::toRoles(['ojt_coordinator'], 'Evaluation submitted', "{$auth->name} submitted the evaluation of {$intern->name}.", 'evaluation');
             }
         } catch (\Throwable $e) { /* notifications are best-effort */ }
 
+        if ($encoding) return response()->json(['message' => $first ? "Paper appraisal encoded. It now counts toward {$intern->name}'s grade." : 'Encoded ratings updated.']);
         return response()->json(['message' => $old ? 'Evaluation updated.' : 'Evaluation submitted.']);
     }
 
