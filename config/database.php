@@ -95,9 +95,12 @@ return [
         'charset' => env('DB_CHARSET', 'utf8'),
         'prefix' => '',
         'prefix_indexes' => true,
-        'search_path' => 'public',
+        // no "set search_path" on every request: the database already uses public first (saves one trip to Supabase per request)
+        'search_path' => null,
         'sslmode' => env('DB_SSLMODE', 'require'),          
-        'options' => [PDO::ATTR_PERSISTENT => true],         
+        // PERSISTENT: keep the connection open between requests.
+        // DISABLE_PREPARES: send each query in ONE trip to Supabase instead of three (prepare, then run).
+        'options' => [PDO::ATTR_PERSISTENT => true, PDO::PGSQL_ATTR_DISABLE_PREPARES => true],         
     ],
 
         'sqlsrv' => [

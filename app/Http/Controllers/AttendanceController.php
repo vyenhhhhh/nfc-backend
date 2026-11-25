@@ -59,8 +59,12 @@ class AttendanceController extends Controller
             }
             $now   = $offline;
             $today = $offline->toDateString();
-            // the card can't be re-written later, so a saved tap is checked by its UID only
-            $request->merge(['writer' => null, 'card' => null, 'offline_sync' => true]);
+            // the card was read (not re-written) while offline: its one-time code is checked now, and no new code is issued
+            $request->merge([
+                'offline_card'   => $request->input('card'),
+                'offline_writer' => $request->input('writer'),
+                'writer' => null, 'card' => null, 'offline_sync' => true,
+            ]);
         }
 
         // find the card (any UID format) and check its one-time code: a copied card is refused and flagged

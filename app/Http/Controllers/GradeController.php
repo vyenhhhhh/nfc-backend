@@ -56,6 +56,18 @@ class GradeController extends Controller
         return ['days' => count($days), 'late' => $late];
     }
 
+    // true when the intern uploaded the narrative report (waiting or approved), or when the coordinator
+    // removed that requirement from the list (then it can't be asked for)
+    private static function hasNarrative(int $internId): bool
+    {
+        if (\App\Services\SchemaCache::has('requirement_defs')) {
+            $def = DB::table('requirement_defs')->where('key', 'narrative_report')->first();
+            if ($def && !$def->active) return true;
+        }
+        return DB::table('movs')->where('user_id', $internId)->where('requirement', 'narrative_report')
+            ->whereIn('status', ['pending', 'approved'])->exists();
+    }
+
     private static function requiredHours(?string $program, $prior = 0): float
     {
         $p = strtoupper((string) $program); $key = null;
@@ -95,10 +107,15 @@ class GradeController extends Controller
         }
 
         $mine = $auth->role === 'supervisor';
+        // the narrative report must be uploaded before the grade is released (unless the requirement was removed)
+        $narrOff = \App\Services\SchemaCache::has('requirement_defs')
+            && ($nd = DB::table('requirement_defs')->where('key', 'narrative_report')->first()) && !$nd->active;
+        $narrIds = $narrOff || $mine ? [] : array_flip(DB::table('movs')->whereIn('user_id', $ids)->where('requirement', 'narrative_report')
+            ->whereIn('status', ['pending', 'approved'])->distinct()->pluck('user_id')->map(fn ($v) => (int) $v)->all());
         // hours and attendance of every intern in two queries (not two per intern)
         $hoursOf = OjtHours::renderedMany($ids);
         $attOf   = self::attendanceMany($ids);
-        $rows = $interns->map(function ($u) use ($evals, $grades, $sups, $docs, $supAddr, $mine, $hoursOf, $attOf) {
+        $rows = $interns->map(function ($u) use ($evals, $grades, $sups, $docs, $supAddr, $mine, $hoursOf, $attOf, $narrOff, $narrIds) {
             $e = $evals[$u->id] ?? null;
             $g = $grades[$u->id] ?? null;
             $sup = $e && $e->mode === 'system' ? Grading::supervisor($e->ratings) : ['total' => null, 'categories' => []];
@@ -127,6 +144,7 @@ class GradeController extends Controller
                     'remarks' => $g->remarks, 'graded_by_name' => $g->graded_by_name, 'finalized_at' => $g->finalized_at, 'updated_at' => $g->updated_at,
                 ] : null,
                 'docs' => $docs[$u->id] ?? (object) [],
+                'narrative_ok' => $mine ? null : ($narrOff || isset($narrIds[(int) $u->id])),
             ];
         });
 
@@ -149,7 +167,7 @@ class GradeController extends Controller
             $u = $users[$id] ?? null;
             if (!$u) continue;
             $required = self::requiredHours($u->program ?? null, $u->prior_hours ?? 0);
-            if (($hoursOf[$id] ?? 0) + 0.01 >= $required) $ready++;
+            if (($hoursOf[$id] ?? 0) + 0.01 >= $required && self::hasNarrative($id)) $ready++;
         }
         return response()->json(['ready' => $ready]);
     }
@@ -181,6 +199,10 @@ class GradeController extends Controller
             $rendered = round(OjtHours::rendered((int) $intern->id), 2);
             if ($required > 0 && $rendered + 0.01 < $required) {
                 return response()->json(['message' => "{$intern->name} has rendered {$rendered} of {$required} hours. Save a draft now and release the grade once the required hours are complete."], 422);
+            }
+            // the narrative report is graded here (25%), so it must be uploaded first (a returned one does not count)
+            if (!self::hasNarrative((int) $intern->id)) {
+                return response()->json(['message' => "{$intern->name} hasn't uploaded the narrative report yet. Save a draft now and release the grade once it is uploaded in Submit MOV (Post-Internship)."], 422);
             }
         }
 

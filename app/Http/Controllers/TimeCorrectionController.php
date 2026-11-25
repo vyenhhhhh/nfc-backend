@@ -30,8 +30,20 @@ class TimeCorrectionController extends Controller
         if ($row->status !== 'pending') {
             return response()->json(['message' => 'Only requests your supervisor has not decided yet can be removed.'], 409);
         }
+        if (!empty($row->proof_path)) \App\Services\PrivateFiles::delete($row->proof_path);
         DB::table('time_corrections')->where('id', $id)->delete();
         return response()->json(['message' => 'Request removed.']);
+    }
+
+    /** the proof file goes to the private disk (short-lived links only) */
+    private static function saveProof(Request $request): array
+    {
+        if (!$request->hasFile('proof') || !\App\Services\SchemaCache::has('time_corrections', 'proof_path')) return [];
+        $f = $request->file('proof');
+        return [
+            'proof_path' => \App\Services\PrivateFiles::store($f, 'correction-proofs'),
+            'proof_name' => mb_substr($f->getClientOriginalName(), 0, 200),
+        ];
     }
 
     public function mine(Request $request)
@@ -57,7 +69,8 @@ class TimeCorrectionController extends Controller
             'time_out'      => 'required_unless:kind,in|nullable|date_format:H:i',
             'time_in'       => 'required_if:kind,in|nullable|date_format:H:i',
             'reason'        => 'required|string|max:500',
-        ]);
+            'proof'         => 'required|file|mimes:jpg,jpeg,png,pdf|max:5120',
+        ], ['proof.required' => 'Attach a proof (a photo or PDF).']);
         $kind = $data['kind'] ?? 'out';
 
         $auth = $request->attributes->get('auth_user');
@@ -129,6 +142,7 @@ class TimeCorrectionController extends Controller
             'requested_in'  => $requestedIn,
             'requested_out' => $out,
             'reason'        => $data['reason'],
+            ...self::saveProof($request),
             'status'        => 'pending',
             'created_at'    => $now,
             'updated_at'    => $now,
@@ -158,7 +172,8 @@ class TimeCorrectionController extends Controller
             'time_in'  => 'required|date_format:H:i',
             'time_out' => 'required|date_format:H:i',
             'reason'   => 'required|string|max:500',
-        ]);
+            'proof'    => 'required|file|mimes:jpg,jpeg,png,pdf|max:5120',
+        ], ['proof.required' => 'Attach a proof (a photo or PDF).']);
         $auth  = $request->attributes->get('auth_user');
         $day   = $data['date'];
         $today = Carbon::today('Asia/Manila')->toDateString();
@@ -214,6 +229,7 @@ class TimeCorrectionController extends Controller
             'requested_in'  => $in,
             'requested_out' => $out,
             'reason'        => $data['reason'],
+            ...self::saveProof($request),
             'status'        => 'pending',
             'created_at'    => $now,
             'updated_at'    => $now,

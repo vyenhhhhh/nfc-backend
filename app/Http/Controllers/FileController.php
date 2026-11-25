@@ -16,6 +16,7 @@ use Illuminate\Support\Facades\DB;
  *   evaluations/    signed evaluation     the admin, the OJT coordinator, the supervisor who sent it,
  *                                         and the intern's own HTE supervisor
  *   excuse-proofs/  school-event proof    the intern, their HTE supervisor, the admin, the OJT coordinator
+ *   correction-proofs/ time-correction proof  the same people
  *   signatures/     staff signatures      staff (admin, coordinator, supervisors) and the owner
  *   work_mode/      old WFH letters       the intern, the admin, the OJT coordinator
  * Anything else (profile photos, blank forms) is public and gets its normal link.
@@ -82,6 +83,13 @@ class FileController extends Controller
                 if (!$e) return false;
                 return $office || (int) $e->evaluator_id === $me
                     || ($role === 'supervisor' && Supervision::supervises($auth, $e->intern_id));
+
+            case 'correction-proofs':
+                // proof of a time correction / missed day: the intern, their HTE supervisor, the admin and the coordinator
+                $owner = DB::table('time_corrections')->where('proof_path', $path)->value('user_id');
+                if ($owner === null) return false;
+                return (int) $owner === $me || $office
+                    || ($role === 'supervisor' && Supervision::supervises($auth, $owner));
 
             case 'excuse-proofs':
                 $owner = DB::table('school_event_excuses')->where('proof_path', $path)->value('user_id');

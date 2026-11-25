@@ -61,6 +61,28 @@ class OjtHours
         return (min($cap, $regular) + $overtime) / 3600;
     }
 
+    /**
+     * Total credited hours of many interns with ONE query: [user_id => hours].
+     * Lists of interns (grades, requirement counts) use this instead of asking once per intern.
+     */
+    public static function renderedMany(array $userIds): array
+    {
+        $ids = array_values(array_unique(array_map('intval', $userIds)));
+        $out = array_fill_keys($ids, 0.0);
+        if (!$ids) return $out;
+        $rows = DB::table('attendance_records')
+            ->whereIn('user_id', $ids)
+            ->get(['user_id', 'date', 'checked_in_at', 'checked_out_at', 'ot_approved_minutes']);
+        foreach ($rows->groupBy('user_id') as $uid => $userRows) {
+            $total = 0;
+            foreach ($userRows->groupBy(fn ($r) => (string) $r->date) as $dayRows) {
+                $total += self::day($dayRows);
+            }
+            $out[(int) $uid] = round($total, 1);
+        }
+        return $out;
+    }
+
     /** Total credited hours of an intern */
     public static function rendered(int $userId): float
     {

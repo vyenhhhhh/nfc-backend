@@ -227,6 +227,37 @@ class CardSecurity
         if (!$writer) {
             if (!$card) return self::unknown($uid);
             if (self::locked($card)) return self::refuseLocked($card);
+            // a tap an ACR122U kiosk saved while OFFLINE: it carries the code read from the card at that moment.
+            // The code is checked now (no new code is written: the kiosk was offline when the card was on it).
+            $p = $request->input('offline_sync') && $request->input('offline_writer')
+                ? self::parsePayload(is_string($request->input('offline_card')) ? $request->input('offline_card') : null) : null;
+            if ($request->input('offline_sync') && $request->input('offline_writer') && ($secured || $p)) {
+                if (!$p) {
+                    return self::refuse(403, 'OFFLINE_NOT_VERIFIED', $card,
+                        'This saved tap could not be verified because no card code was read, so it was not recorded. Ask your HTE supervisor for a time correction.');
+                }
+                $owner = DB::table('nfc_cards')->where('card_uuid', $p['uuid'])->first();
+                if (!$owner) {
+                    self::flag($card, $uid, $p['uuid'], 'unknown_card', $kiosk, $request,
+                        'A tap saved while the kiosk was offline carried a card ID the system does not know (a replaced card, or a fake one).');
+                    return self::refuse(403, 'CARD_FLAGGED', $card, self::flaggedMsg());
+                }
+                if ((int) $owner->id !== (int) $card->id) {
+                    self::flag($owner, $uid, $p['uuid'], 'copied_to_other_card', $kiosk, $request,
+                        "A tap saved while the kiosk was offline carried this intern's card data on another card (UID {$uid}).");
+                    return self::refuse(403, 'CARD_FLAGGED', $owner, self::flaggedMsg());
+                }
+                $h = self::hashToken($p['token']);
+                $current = (!empty($card->token_hash) && hash_equals($card->token_hash, $h))
+                        || (!empty($card->pending_hash) && hash_equals($card->pending_hash, $h));
+                if (!$current) {
+                    // an old code: the card was used again before this saved tap was sent (or it is a copy).
+                    // Not recorded, but not flagged either: a real intern who also tapped at another kiosk is not locked out.
+                    return self::refuse(403, 'OFFLINE_NOT_VERIFIED', $card,
+                        'This saved tap carried an old card code (the card was used again before it was sent), so it was not recorded. Ask your HTE supervisor for a time correction.');
+                }
+                return ['ok' => true, 'card' => $card, 'secured' => false];
+            }
             if (self::mode() === 'strict' && $secured && !$request->input('offline_sync')) {
                 return self::refuse(403, 'USE_SECURE_KIOSK', $card,
                     'Please tap on a kiosk with the new card reader. This tap was not recorded.');

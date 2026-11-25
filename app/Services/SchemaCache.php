@@ -57,7 +57,13 @@ class SchemaCache
                 : DB::select("select table_name, column_name from information_schema.columns where table_schema = database()");
             foreach ($rows as $r) $map[$r->table_name][$r->column_name] = true;
         } catch (\Throwable $e) {
-            return self::$map = self::$map ?? [];
+            // the database could not be reached: that is NOT "the table doesn't exist".
+            // Use the last good copy if there is one; otherwise let the request fail (a server error),
+            // so a kiosk keeps its saved taps and tries again instead of treating them as refused.
+            if (self::$map) return self::$map;
+            $kept = Cache::get('schema_map');
+            if (is_array($kept) && $kept) return self::$map = $kept;
+            throw $e;
         }
         self::$fresh = true;
         if ($map) Cache::put('schema_map', $map, 86400);
