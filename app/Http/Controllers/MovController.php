@@ -123,8 +123,10 @@ class MovController extends Controller
         if (!$mov || (int) $mov->user_id !== (int) $auth->id) {
             return response()->json(['message' => 'Submission not found.'], 404);
         }
-        if ($mov->status !== 'pending') {
-            return response()->json(['message' => 'Only pending submissions can be removed.'], 409);
+        // waiting submissions can be taken back; a returned "other document" can also be cleared from the list
+        $isOther = in_array($mov->requirement ?? 'others', ['others', '', null], true);
+        if (!($mov->status === 'pending' || ($mov->status === 'rejected' && $isOther))) {
+            return response()->json(['message' => 'Only waiting submissions, or returned other documents, can be removed.'], 409);
         }
 
         \App\Services\PrivateFiles::delete($mov->file_path);
